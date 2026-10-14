@@ -658,7 +658,8 @@ function pace(avg){
 function CutHero({avg}){
   const S = DB.set, now = avg[avg.length-1], wk = pace(avg);
   if (!now) return html`<section class="hero"><span class="l">Cut</span><b>– kg</b><span class="s">Log your weight on Today to start the trend.</span></section>`;
-  const goal = S.lean ? S.lean / (1 - (S.goalBf || 15)/100) : null;
+  // Goal weight from Settings; without one, 15% body fat at today's lean mass.
+  const goal = S.goalKg || (S.lean ? S.lean / .85 : null);
   const togo = goal ? now.y - goal : null;
   const weeks = togo > 0 && wk < 0 ? Math.min(104, togo / -wk) : null;
   const eta = weeks != null ? addDays(parseKey(now.x), Math.round(weeks*7)) : null;
@@ -670,7 +671,7 @@ function CutHero({avg}){
   const line = avg.map((p) => `${X(parseKey(p.x).getTime()).toFixed(1)},${Y(p.y).toFixed(1)}`).join(" ");
   const nx = X(parseKey(now.x).getTime()), ny = Y(now.y);
   return html`<section class="hero">
-    <span class="l">Cut · to ${S.goalBf || 15}% body fat</span>
+    <span class="l">Cut · to ${goal ? `${fmt(goal)} kg` : "goal"}${goal && S.lean ? ` · about ${Math.round(100*(1 - S.lean/goal))}% body fat` : ""}</span>
     <b class="num">${fmt(now.y)} kg</b>
     <span class="s">${!goal ? "Enter your body fat % in Settings to see your goal weight." : togo <= 0 ? "Goal weight reached." :
       `Goal about ${fmt(goal)} kg · ${fmt(togo)} kg to go · ${eta ? `on pace for ${eta.toLocaleDateString(undefined,{day:"numeric", month:"short", year:"numeric"})}` : wk == null ? "pace shows after a week of weigh-ins" : "not losing yet"}`}</span>
@@ -791,8 +792,8 @@ function Settings({nav}){
     <section class="card list">
       <label class="cell"><div class="grow"><b>Body fat now</b><span>${S.lean ? `Lean mass ${fmt(S.lean)} kg, from your 7-day average weight` : "Sets your lean mass for the goal weight"}</span></div>
         <input class="inp num" type="number" inputmode="decimal" placeholder="%" onChange=${(e) => { const bf = num(e.target.value), a = bwAvg().pop(); if (!a) return toast("Log your weight first"); if (bf > 3 && bf < 60) { S.lean = r1(a.y * (1 - bf/100)); save(); toast(`Lean mass ${fmt(S.lean)} kg`); rerender(); } }}/><span class="unit">%</span></label>
-      <label class="cell"><div class="grow"><b>Goal body fat</b></div>
-        <input class="inp num" type="number" inputmode="numeric" value=${S.goalBf || 15} onChange=${(e) => setT("goalBf", e.target.value)}/><span class="unit">%</span></label>
+      <label class="cell"><div class="grow"><b>Goal weight</b><span>${S.goalKg && S.lean ? `About ${Math.round(100*(1 - S.lean/S.goalKg))}% body fat at that weight` : S.lean ? `Empty: ${fmt(S.lean/.85)} kg, which is 15% body fat` : "Set your body fat first"}</span></div>
+        <input class="inp num" type="number" inputmode="decimal" step="0.5" placeholder="kg" value=${S.goalKg || ""} onChange=${(e) => setT("goalKg", e.target.value)}/><span class="unit">kg</span></label>
     </section>
     <h2 class="sh">Training</h2>
     <section class="card list"><label class="cell"><div class="grow"><b>Deload every 5th week</b><span>Half the sets at 90% weight</span></div>
