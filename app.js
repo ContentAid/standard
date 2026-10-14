@@ -30,7 +30,7 @@ const mondayOf = (d) => addDays(d, d.getDay() === 0 ? -6 : 1-d.getDay());
 
 /* ================= storage ================= */
 const LS = "standard-v1";
-function blank(){ return {v:4, days:{}, food:{}, water:{}, bw:[], lifts:[], custom:[], set:{p:100, k:2200, w:8}}; }
+function blank(){ return {v:4, days:{}, food:{}, water:{}, bw:[], lifts:[], custom:[], set:{p:100, k:2000, w:8}}; }
 // v1/v2 kept habits as d:[4 flags]; v3 keys them by habit id. The old score is kept so past streaks still count.
 const OLD_ORDER = ["deep","workout","read","steps"];
 function migrateDay(d){
@@ -50,7 +50,7 @@ function norm(d){
   const slots = new Set(MEALS.map((m) => m[0]));
   for (const k in d.food) d.food[k].forEach((f) => { if (f.slot && !slots.has(f.slot)) delete f.slot; });
   renameOld(d);
-  if (d.v < 4) { if (d.set.k === 2700) d.set.k = 2200; if (d.set.p === 150) d.set.p = 100; } // v4: bulk -> cut
+  if (d.v < 4) { if (d.set.k === 2700) d.set.k = 2000; if (d.set.p === 150) d.set.p = 100; } // v4: bulk -> cut
   d.v = 4;
   return d;
 }
@@ -105,7 +105,40 @@ function load(){
 }
 let DB = load();
 let saveOk = true;
-function save(){ try { localStorage.setItem(LS, JSON.stringify(DB)); saveOk = true; } catch(e){ saveOk = false; } }
+function save(){ try { localStorage.setItem(LS, JSON.stringify(DB)); saveOk = true; } catch(e){ saveOk = false; } syncSoon(); }
+
+/* ================= sync ================= */
+// Offline first: every save also goes to data.json in a private GitHub repo once online.
+// The token lives in its own key, never inside DB, so exports never carry it.
+// ponytail: last write wins, fine for one phone; merge if a second device ever logs too.
+// ponytail: the contents API returns inline content up to 1 MB (about a year of logs); switch pullSync to the raw media type past that.
+const SYNC_REPO = "ContentAid/standard-data", SK = "standard-sync";
+let sync = {}; try { sync = JSON.parse(localStorage.getItem(SK)) || {}; } catch(e){}
+const saveSync = () => { try { localStorage.setItem(SK, JSON.stringify(sync)); } catch(e){} };
+let syncT = 0, syncing = false;
+function syncSoon(){ if (!sync.token) return; clearTimeout(syncT); syncT = setTimeout(pushSync, 4000); }
+const gh = (method, body) => fetch(`https://api.github.com/repos/${SYNC_REPO}/contents/data.json`, {method, cache:"no-store",
+  headers:{Authorization:"Bearer "+sync.token, Accept:"application/vnd.github+json"}, body: body && JSON.stringify(body)});
+const b64 = (str) => { const b = new TextEncoder().encode(str); let o = ""; for (let i = 0; i < b.length; i += 8192) o += String.fromCharCode(...b.subarray(i, i+8192)); return btoa(o); };
+const unb64 = (x) => new TextDecoder().decode(Uint8Array.from(atob(x.replace(/\n/g,"")), (c) => c.charCodeAt(0)));
+async function pushSync(retry){
+  if (!sync.token || syncing || !navigator.onLine) return;
+  syncing = true;
+  try {
+    if (!sync.sha) { const r = await gh("GET"); if (r.ok) sync.sha = (await r.json()).sha; else if (r.status !== 404) throw r.status; }
+    const r = await gh("PUT", {message:"sync "+new Date().toISOString(), content:b64(JSON.stringify(DB, null, 1)), sha:sync.sha});
+    if ((r.status === 409 || r.status === 422) && !retry) { sync.sha = null; syncing = false; return pushSync(true); }
+    if (!r.ok) throw r.status;
+    sync.sha = (await r.json()).content.sha; sync.at = Date.now(); sync.err = "";
+  } catch(e){ sync.err = e === 401 ? "Token rejected" : "Not synced yet (" + (typeof e === "number" ? e : "offline") + ")"; }
+  syncing = false; saveSync(); rerender();
+}
+async function pullSync(){
+  const r = await gh("GET"); if (!r.ok) throw r.status;
+  const j = await r.json(); sync.sha = j.sha; saveSync();
+  return JSON.parse(unb64(j.content));
+}
+addEventListener("online", () => syncSoon());
 save();
 try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch(e){}
 
@@ -165,7 +198,8 @@ function stalled(name){ const h = e1History(name); if (h.length < 4) return fals
 // Today's target for one exercise: weight, reps, sets, and the reason in one line.
 function prescribe(e, rec){
   const [lo, hi] = repRange(e[2]), inc = BIG_JUMP.test(e[0]) ? 5 : 2.5;
-  const last = lastPerf(e[0], rec);
+  let last = lastPerf(e[0], rec), from = null;
+  if (!last && e[7] && (last = lastPerf(e[7], rec))) from = e[7];
   let sets = e[1], w = null, r = lo, why = `New exercise: pick a weight you can lift ${lo}–${hi} times with 1–2 reps to spare.`, up = false;
   if (last) {
     const top = Math.max(...last.sets.map((x) => num(x.w)));
@@ -174,6 +208,7 @@ function prescribe(e, rec){
     else if (top && last.sets.length >= e[1] && work.every((x) => num(x.r) >= hi)) { w = top+inc; r = lo; up = true; why = `Last time every set hit ${hi} reps, so add ${inc} kg.`; }
     else if (top) { w = top; r = Math.min(hi, Math.max(...work.map((x) => num(x.r))) + 1); why = `Same weight as last time. Get ${hi} reps on every set to earn +${inc} kg.`; }
     else { r = Math.min(hi, Math.max(...last.sets.map((x) => num(x.r))) + 1); why = `Bodyweight: aim for ${r} reps.`; }
+    if (from) { up = false; why = `First time: started from your ${from} numbers. Adjust after set 1.`; }
     if (stalled(e[0])) why += " No progress in 3 sessions: slow the lowering to 3 seconds.";
   }
   if (rec && rec.deload) { sets = Math.max(1, Math.ceil(sets/2)); if (w) w = round25(w*.9); why = "Deload week: half the sets at 90% weight, stop 3 reps short."; up = false; }
@@ -294,61 +329,71 @@ const Bar = ({v, of, cls=""}) => html`<div class=${"bar " + cls} role="progressb
 /* ================= Today ================= */
 function Today({nav}){
   const k = today(), d = dayRec(k) || {m:"full", h:{}}, t = totals(k), ls = liftStatus(k);
-  const done = doneCount(k), st = streak(), gap = proteinPace() - t.p, wtr = DB.water[k] || 0;
+  const st = streak(), gap = proteinPace() - t.p, wtr = DB.water[k] || 0, S = DB.set;
   const todayBw = DB.bw.find((b) => b.date === k), prevBw = DB.bw.filter((b) => b.date < k).pop();
-  const [bw, setBw] = useState(todayBw || !prevBw ? "" : String(prevBw.kg)); // yesterday's weight prefilled: one tap if unchanged
+  const [bw, setBw] = useState(null), [open, setOpen] = useState({});
+  const fold = (g) => setOpen({...open, [g]: !open[g]});
   const toggle = (h) => { const dd = editDay(k); if (dd.h[h.id]) delete dd.h[h.id]; else dd.h[h.id] = 1; buzz(10); commit(); };
-  const trainDue = !ls.rest && ls.done < ls.tot;
-  // Every meal not logged yet, in day order, each one tap. Shake only once training has started.
-  const open = MEALS.filter(([id, , optional]) => !optional && !eaten(k, id) && (id !== "shake" || ls.done > 0 || ls.rest));
+  const saveBw = (kg) => { if (!num(kg)) return toast("Enter your weight in kg"); addBw(DB, k, kg); setBw(null); buzz(10); toast(`Saved ${num(kg)} kg`); commit(); };
+  // Food: every meal not logged yet, its usual dish one tap away. Shake once training has started.
+  const meals = MEALS.filter(([id, , optional]) => !optional && !eaten(k, id) && (id !== "shake" || ls.done > 0 || ls.rest));
+  const logged = foodList(k);
+  const trained = ls.rest || ls.done >= ls.tot*.75;
+  const habits = HABITS.filter((h) => !h.auto), hDone = habits.filter((h) => habitDone(k, h));
+  const bodyDone = [trained && "workout", todayBw && "weight", wtr >= S.w && "water"].filter(Boolean);
+  const Fold = ({g, n, children}) => n > 0 && html`<button class="fold" onClick=${() => fold(g)}><${Icon} n="check" s=${16}/>${n} done${open[g] ? "" : " · show"}</button>${open[g] && html`<div class="dl">${children}</div>`}`;
+  const nagBackup = !sync.token && (DB.lifts.length || Object.keys(DB.days).length) && (!DB.lastExport || Date.now() - DB.lastExport > 7*864e5);
   return html`
-    <${Title} title="Today" sub=${parseKey(k).toLocaleDateString(undefined,{weekday:"long", day:"numeric", month:"long"})}
-      right=${html`<div class="row">${st > 0 && html`<span class="streak" aria-label=${`${st} day streak`}><${Icon} n="flame" s=${16}/>${st}</span>`}
-        <button class="iconbtn" onClick=${() => nav.open({kind:"settings"})} aria-label="Settings"><${Icon} n="gear" s=${21}/></button></div>`}/>
+    <header class="title"><h1 class="grow dateh">${parseKey(k).toLocaleDateString(undefined,{weekday:"long", day:"numeric", month:"long"})}</h1>
+      <div class="row">${st > 0 && html`<span class="streak" aria-label=${`${st} day streak`}><${Icon} n="flame" s=${16}/>${st}</span>`}
+        <button class="iconbtn" onClick=${() => nav.open({kind:"settings"})} aria-label="Settings"><${Icon} n="gear" s=${21}/></button></div></header>
 
-    <section class="card summary">
-      <a class="sumrow" href="#habits"><span class="sl">Habits</span><span class="sv num"><b>${done}</b> / ${HABITS.length}</span><${Bar} v=${done} of=${HABITS.length} cls=${done >= MET ? "good" : ""}/></a>
-      <button class="sumrow" onClick=${() => nav.go("food")}><span class="sl">Protein</span><span class="sv num"><b>${Math.round(t.p)}</b> / ${DB.set.p} g</span><${Bar} v=${t.p} of=${DB.set.p} cls=${t.p >= DB.set.p ? "good" : ""}/></button>
-      <button class="sumrow" onClick=${() => { DB.water[k] = wtr + 1; buzz(10); commit(); }} aria-label="Add a glass of water"><span class="sl">Water</span><span class="sv num"><b>${wtr}</b> / ${DB.set.w} · tap +1</span><${Bar} v=${wtr} of=${DB.set.w} cls=${wtr >= DB.set.w ? "good" : ""}/></button>
-      <button class="sumrow" onClick=${() => nav.go("train")}><span class="sl">Workout</span><span class="sv num">${ls.rest ? "Rest day" : html`<b>${ls.done}</b> / ${ls.tot} sets`}</span><${Bar} v=${ls.rest ? 1 : ls.done} of=${ls.rest ? 1 : ls.tot} cls=${ls.rest || ls.done >= ls.tot ? "good" : ""}/></button>
+    <div class="stat2">
+      <button class="statc" onClick=${() => nav.go("food")}><span class="l">Protein</span><b>${Math.round(t.p)}</b><span class="of">of ${S.p} g</span><div class="trk"><i style=${`width:${Math.min(100, 100*t.p/S.p)}%`}></i></div></button>
+      <button class=${"statc k" + (t.k > S.k ? " over" : "")} onClick=${() => nav.go("food")}><span class="l">Calories</span><b>${Math.round(t.k)}</b><span class="of">${t.k > S.k ? `${Math.round(t.k - S.k)} over ${S.k}` : `of ${S.k} kcal`}</span><div class="trk"><i style=${`width:${Math.min(100, 100*t.k/S.k)}%`}></i></div></button>
+    </div>
+
+    <div class="grp"><h2 class="gh2">Food<small>${logged.length} logged</small></h2><section class="card">
+      ${meals.map(([id, label, , opts]) => { const o = slotOpts(id, opts)[0]; return html`<div class="do">
+        <button class="t" onClick=${() => { pickMeal(id, o); buzz(10); toast(`${label} logged · ${o[1]} g protein`); }}><b>${label}</b><span>${o[0]}</span></button>
+        <span class="v">${o[1]} g</span><button class="chg" onClick=${() => nav.go("food")}>change</button>
+        <button class="plus" onClick=${() => { pickMeal(id, o); buzz(10); toast(`${label} logged · ${o[1]} g protein`); }} aria-label=${`Log ${label}: ${o[0]}`}><${Icon} n="check" s=${20}/></button></div>`; })}
+      ${gap > 20 && html`<div class="do"><div class="t"><b>${Math.round(gap)} g protein behind</b><span>${TOPUPS[1].n}, ${TOPUPS[1].u}</span></div><span class="v">+${TOPUPS[1].p} g</span>
+        <button class="plus" onClick=${() => { addExtra(TOPUPS[1]); toast(`+${TOPUPS[1].p} g protein`); }} aria-label="Add whey"><${Icon} n="plus" s=${20}/></button></div>`}
+      <button class="do" onClick=${() => nav.go("food")}><span class="t"><b>Something else</b><span>Search ${FOODS.length} foods or type anything</span></span><span class="plus"><${Icon} n="plus" s=${20}/></span></button>
+      <${Fold} g="food" n=${logged.length}>${logged.map((f) => html`<button onClick=${() => { logged.splice(logged.indexOf(f), 1); toast(`Removed ${f.n}`); commit(); }}><span>${f.q !== 1 ? `${f.q} × ` : ""}${f.n} · ${r1(f.p*f.q)} g</span><em>undo</em></button>`)}<//>
+    </section></div>
+
+    <div class="grp"><h2 class="gh2">Body<small>${bodyDone.length} of 3</small></h2><section class="card">
+      ${!trained && html`<div class="do"><div class="t"><b>${PROGRAM[ls.day].title}</b><span>${ls.done ? `${ls.done} of ${ls.tot} sets done` : `${PROGRAM[ls.day].ex.length} exercises · about ${minutes(ls.day)} min`}</span></div>
+        <button class="go" onClick=${() => nav.openGym()}>${ls.done ? "Resume" : "Start"}</button></div>`}
+      ${!todayBw && (bw == null && prevBw ? html`<div class="do">
+          <button class="t" onClick=${() => saveBw(prevBw.kg)}><b>Weight</b><span>${prevBw.kg} kg, same as yesterday</span></button>
+          <button class="chg" onClick=${() => setBw(String(prevBw.kg))}>change</button>
+          <button class="plus" onClick=${() => saveBw(prevBw.kg)} aria-label=${`Log ${prevBw.kg} kg`}><${Icon} n="check" s=${20}/></button></div>`
+        : html`<form class="do" onSubmit=${(e) => { e.preventDefault(); saveBw(bw); }}><div class="t"><b>Weight</b><span>After waking up</span></div>
+          <input class="inp num" type="number" inputmode="decimal" step="0.1" placeholder="kg" value=${bw || ""} onInput=${(e) => setBw(e.target.value)} aria-label="Bodyweight in kg"/>
+          <button class="plus" aria-label="Save weight"><${Icon} n="check" s=${20}/></button></form>`)}
+      ${wtr < S.w && html`<button class="do" onClick=${() => { DB.water[k] = wtr + 1; buzz(10); commit(); }} aria-label="Add a glass of water">
+        <span class="t"><b>Water</b><span class="wpills">${Array.from({length:S.w}, (_, j) => html`<i class=${j < wtr ? "on" : ""}></i>`)}</span></span><span class="plus">${wtr}</span></button>`}
+      ${bodyDone.length === 3 && html`<div class="alldone">All done</div>`}
+      <${Fold} g="body" n=${bodyDone.length}>
+        ${trained && html`<button onClick=${() => ls.rest ? null : nav.go("train")}><span>${ls.rest ? "Rest day" : `${PROGRAM[ls.day].title} · ${ls.done} sets`}</span><em>${ls.rest ? "" : "view"}</em></button>`}
+        ${todayBw && html`<button onClick=${() => { DB.bw.splice(DB.bw.indexOf(todayBw), 1); commit(); }}><span>Weight · ${todayBw.kg} kg</span><em>undo</em></button>`}
+        ${wtr >= S.w && html`<button onClick=${() => { DB.water[k] = wtr - 1; commit(); }}><span>Water · ${wtr} glasses</span><em>−1</em></button>`}<//>
+    </section></div>
+
+    <div class="grp"><h2 class="gh2">Habits<button onClick=${() => { editDay(k).m = d.m === "full" ? "bare" : "full"; commit(); }} aria-label="Switch standard">${hDone.length} of ${habits.length} · ${d.m === "full" ? "Full" : "Bare minimum"} ⇄</button></h2><section class="card">
+      ${habits.filter((h) => !habitDone(k, h)).map((h) => html`<button class="do" onClick=${() => toggle(h)}>
+        <span class="t"><b>${h.name}</b><span>${h[d.m]}</span></span><span class="plus"><${Icon} n="check" s=${20}/></span></button>`)}
+      ${hDone.length === habits.length && html`<div class="alldone">All done</div>`}
+      <${Fold} g="habits" n=${hDone.length}>${hDone.map((h) => html`<button onClick=${() => toggle(h)}><span>${h.name}</span><em>undo</em></button>`)}<//>
     </section>
+    <p class="foot">${dayMet(k) ? "Today counts toward your streak." : `${MET - doneCount(k)} more to keep the streak (workout and protein count too).`}</p></div>
 
-    <h2 class="sh">Up next</h2>
-    <section class="card list">
-      ${trainDue && html`<div class="cell">
-        <div class="grow"><b>${PROGRAM[ls.day].title}</b><span>${ls.done ? `${ls.done} of ${ls.tot} sets done` : `${PROGRAM[ls.day].ex.length} exercises · about ${minutes(ls.day)} min`}</span></div>
-        <button class="btn primary" onClick=${() => nav.openGym()}>${ls.done ? "Resume" : "Start"}</button></div>`}
-      ${open.map(([id, label, , opts]) => html`<div class="cell col">
-        <div><b>${label}</b><span>Tap what you ate</span></div>
-        <div class="chips">${slotOpts(id, opts).slice(0, 4).map((o) => html`<button class="chip" onClick=${() => { pickMeal(id, o); buzz(10); toast(`${label} logged · ${o[1]} g protein`); }}>${o[0]}<em>${o[1]} g</em></button>`)}
-          <button class="chip" onClick=${() => nav.go("food")}>Other…</button></div></div>`)}
-      ${gap > 20 && html`<div class="cell">
-        <div class="grow"><b>${Math.round(gap)} g protein behind schedule</b><span>${TOPUPS[1].n}, ${TOPUPS[1].u}: +${TOPUPS[1].p} g</span></div>
-        <button class="btn" onClick=${() => { addExtra(TOPUPS[1]); toast(`+${TOPUPS[1].p} g protein`); }}>Add</button></div>`}
-      ${!trainDue && !open.length && gap <= 20 && html`<div class="cell"><div class="grow"><b>Nothing due</b><span>${ls.rest ? "Rest day" : "Workout done"} and meals logged.</span></div></div>`}
-    </section>
-
-    <div class="shrow" id="habits"><h2 class="sh">Habits</h2>
-      <div class="seg" role="group" aria-label="Standard for today">${["full","bare"].map((m) => html`<button class=${d.m === m ? "on" : ""} aria-pressed=${d.m === m} onClick=${() => { editDay(k).m = m; commit(); }}>${m === "full" ? "Full" : "Bare minimum"}</button>`)}</div></div>
-    <section class="card list">
-      ${HABITS.map((h) => { const s = habitDone(k, h); return html`<button class=${"cell habit" + (s ? " on" : "")} onClick=${() => toggle(h)} aria-pressed=${!!s}>
-        <span class="tick">${s && html`<${Icon} n="check" s=${16}/>`}</span>
-        <span class="grow"><b>${h.name}</b><span>${h[d.m]}${h.auto === "protein" ? ` (${Math.round(DB.set.p * (d.m === "bare" ? .8 : 1))} g)` : ""}</span></span>
-        ${s === "auto" && html`<span class="tag">From log</span>`}</button>`; })}
-    </section>
-    <p class="foot">${done >= MET ? "Today counts toward your streak." : `${MET - done} more to keep the streak. A day counts at 4 of 6.`}</p>
-
-    ${(DB.lifts.length || Object.keys(DB.days).length) && (!DB.lastExport || Date.now() - DB.lastExport > 7*864e5) && html`<section class="card list backup"><div class="cell">
-      <div class="grow"><b>Back up your data</b><span>${DB.lastExport ? `Last backup ${short(key(new Date(DB.lastExport)))}` : "No backup yet"}. Your logs live only on this phone.</span></div>
-      <button class="btn" onClick=${exportData}>Back up</button></div></section>`}
-
-    <h2 class="sh">Bodyweight</h2>
-    <form class="card list" onSubmit=${(e) => { e.preventDefault(); if (!num(bw)) return toast("Enter your weight in kg"); addBw(DB, k, bw); toast(`Saved ${num(bw)} kg`); commit(); }}>
-      <div class="cell">
-        <div class="grow"><b>${todayBw ? `${todayBw.kg} kg today` : "Not logged today"}</b><span>${prevBw ? `Before: ${prevBw.kg} kg on ${short(prevBw.date)}` : "Weigh in after waking up"}</span></div>
-        <input class="inp num" type="number" inputmode="decimal" step="0.1" placeholder="kg" value=${bw} onInput=${(e) => setBw(e.target.value)} aria-label="Bodyweight in kg"/>
-        <button class="btn">Save</button></div>
-    </form>`;
+    ${nagBackup && html`<section class="card list backup"><div class="cell">
+      <div class="grow"><b>Back up your data</b><span>Turn on sync in Settings, or export a file.</span></div>
+      <button class="btn" onClick=${() => nav.open({kind:"settings"})}>Set up</button></div></section>`}`;
 }
 
 /* ================= Train ================= */
@@ -366,12 +411,12 @@ function Train({nav}){
         <div class="wtop"><div class="grow"><h2>${p.title}</h2><p>${p.sub}</p></div><span class="meta num">${p.ex.length} exercises<br/>about ${minutes(sel)} min</span></div>
         <button class="btn primary wide" onClick=${() => nav.openGym(sel)}>${sel === td && ls.done ? `Resume · ${ls.done} of ${ls.tot} sets` : sel === td ? "Start workout" : `Do ${p.title} today`}</button>
       </section>
-      <h2 class="sh">Today's targets</h2>
+      <h2 class="sh">${sel === td ? "Today's targets" : `${sel} targets`}</h2>
       <section class="card list">${p.ex.map((e) => { const pr = prescribe(e, preview); return html`
         <button class="cell" onClick=${() => nav.open({kind:"ex", name:e[0]})}>
           <div class="grow"><b>${e[0]}</b><span>${pr.sets} sets × ${e[2]} reps · ${e[6]}</span></div>
-          <span class=${"val num" + (pr.up ? " pos" : "")}>${pr.w ? `${fmt(pr.w)} kg` : "New"}${pr.up ? html`<${Icon} n="up" s=${14}/>` : ""}</span><${Icon} n="chev" s=${16}/></button>`; })}</section>
-      <p class="foot">Targets come from your last session. Tap an exercise for its history and form cue.</p>`}`;
+          <span class=${"val num" + (pr.up ? " pos" : "")}>${pr.w ? `${fmt(pr.w)} kg × ${pr.r}` : pr.last ? `${pr.r} reps` : "New"}${pr.up ? html`<${Icon} n="up" s=${14}/>` : ""}</span><${Icon} n="chev" s=${16}/></button>`; })}</section>
+      <p class="foot">Predicted from your last session: hit the top of the range on every set and the weight goes up. Tap an exercise for its history and form cue.</p>`}`;
 }
 
 function ExerciseDetail({name, nav}){
@@ -500,6 +545,7 @@ function Gym({day, start, close}){
           <input class="num" type="number" inputmode="numeric" value=${v.r} placeholder="0" onInput=${(ev) => setVal("r", ev.target.value)} aria-label="Reps"/>
           <button onClick=${() => step("r", 1)} aria-label="One rep more"><${Icon} n="plus" s=${22}/></button></div></div>
       </div>
+      ${cur === ex.sets.length-1 && edit == null && pr.lo >= 10 && html`<p class="why up">Last set: go to failure.</p>`}
       <button class="btn primary wide big" onClick=${logSet}>${edit != null ? `Save set ${cur+1}` : `Log ${num(v.w) ? `${v.w} kg × ` : ""}${v.r || 0} reps`}</button>
       ${edit != null && html`<button class="link center" onClick=${() => { Object.assign(ex.sets[edit], {done:false, pr:false}); setEdit(null); save(); }}>Clear set ${edit+1}</button>`}`}
     </div>
@@ -636,7 +682,7 @@ function Overview(){
   return html`
     <h2 class="sh">This week</h2>
     <section class="card stats3">
-      <div><b class="num">${wd}<small>/6</small></b><span>workouts</span></div>
+      <div><b class="num">${wd}<small>/${Object.keys(PROGRAM).length}</small></b><span>workouts</span></div>
       <div><b class="num">${Math.round(avgP)}<small> g</small></b><span>avg protein</span></div>
       <div><b class="num">${met}<small>/${days7.length}</small></b><span>habit days met</span></div>
     </section>
@@ -690,6 +736,14 @@ function Body(){
 /* ================= Settings ================= */
 function Settings({nav}){
   const S = DB.set, fileRef = useRef(), [armed, setArmed] = useState(false), [armed2, setArmed2] = useState(false);
+  const [tok, setTok] = useState(""), [armed3, setArmed3] = useState(false);
+  const connect = async () => {
+    sync = {token: tok.trim()}; saveSync(); setTok("");
+    try { const o = await pullSync(); const empty = !DB.lifts.length && !Object.keys(DB.food).length;
+      if (empty) { DB = norm(o); save(); toast("Restored from sync"); } else { toast("Connected"); pushSync(); } }
+    catch(e){ if (e === 404) { toast("Connected"); pushSync(); } else { sync = {}; saveSync(); toast(e === 401 ? "Token rejected" : "Couldn't reach GitHub"); } }
+    rerender();
+  };
   const setT = (f, v) => { if (num(v) > 0) { S[f] = num(v); save(); toast("Saved"); rerender(); } };
   return html`
     <button class="backbtn" onClick=${nav.back}><${Icon} n="back" s=${20}/>Back</button>
@@ -702,6 +756,15 @@ function Settings({nav}){
     <h2 class="sh">Training</h2>
     <section class="card list"><label class="cell"><div class="grow"><b>Deload every 5th week</b><span>Half the sets at 90% weight</span></div>
       <input type="checkbox" class="switch" checked=${!S.deloadOff} onChange=${(e) => { S.deloadOff = !e.target.checked; commit(); }}/></label></section>
+    <h2 class="sh">Sync</h2>
+    ${sync.token ? html`<section class="card list">
+      <div class="cell"><div class="grow"><b>${sync.err || (sync.at ? `Synced ${new Date(sync.at).toLocaleString(undefined,{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}` : "Connected, syncing…")}</b><span>Every change is saved to the private repo ${SYNC_REPO} when you're online.</span></div></div>
+      <button class="cell" onClick=${() => pushSync()}><div class="grow"><b>Sync now</b></div><${Icon} n="chev" s=${16}/></button>
+      <button class="cell" onClick=${async () => { if (!armed3) return setArmed3(true); try { DB = norm(await pullSync()); save(); toast("Restored from sync"); } catch(e){ toast("Couldn't restore"); } setArmed3(false); rerender(); }}><div class="grow"><b>${armed3 ? "Tap again: replace this phone's data with the synced copy" : "Restore from sync"}</b><span>For a new phone or after a reset</span></div></button>
+      <button class="cell danger" onClick=${() => { sync = {}; saveSync(); rerender(); }}><div class="grow"><b>Disconnect</b></div></button></section>`
+    : html`<form class="card list" onSubmit=${(e) => { e.preventDefault(); if (tok.trim()) connect(); }}>
+      <div class="cell col"><div><b>Back up automatically</b><span>Make a fine-grained token at github.com/settings/personal-access-tokens/new: only ${SYNC_REPO}, Contents read and write. Paste it here once.</span></div>
+        <div class="row"><input class="inp grow" type="password" autocomplete="off" placeholder="github_pat_…" value=${tok} onInput=${(e) => setTok(e.target.value)} aria-label="GitHub token"/><button class="btn primary">Connect</button></div></div></form>`}
     <h2 class="sh">Your data</h2>
     <section class="card list">
       <button class="cell" onClick=${exportData}><div class="grow"><b>Export backup</b><span>Saves a .json file to your phone</span></div><${Icon} n="chev" s=${16}/></button>
