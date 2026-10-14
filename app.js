@@ -7,6 +7,7 @@ const WEEK = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const BIG_JUMP = /squat|deadlift|leg press|romanian/i;
 // Name -> program row, so any logged exercise can find its rep range, rest and muscle.
 const EX = {}; Object.values(PROGRAM).forEach((d) => d.ex.forEach((e) => { EX[e[0]] = e; }));
+Object.values(PROGRAM).forEach((d) => d.ex.forEach((e) => { if (e[7] && !EX[e[7]]) EX[e[7]] = [e[7], ...e.slice(1,7), e[0]]; }));
 
 /* ================= helpers ================= */
 const pad = (n) => String(n).padStart(2,"0");
@@ -29,7 +30,7 @@ const mondayOf = (d) => addDays(d, d.getDay() === 0 ? -6 : 1-d.getDay());
 
 /* ================= storage ================= */
 const LS = "standard-v1";
-function blank(){ return {v:3, days:{}, food:{}, water:{}, bw:[], lifts:[], custom:[], set:{p:150, k:2700, w:8}}; }
+function blank(){ return {v:4, days:{}, food:{}, water:{}, bw:[], lifts:[], custom:[], set:{p:150, k:2200, w:8}}; }
 // v1/v2 kept habits as d:[4 flags]; v3 keys them by habit id. The old score is kept so past streaks still count.
 const OLD_ORDER = ["deep","workout","read","steps"];
 function migrateDay(d){
@@ -49,7 +50,8 @@ function norm(d){
   const slots = new Set(MEALS.map((m) => m[0]));
   for (const k in d.food) d.food[k].forEach((f) => { if (f.slot && !slots.has(f.slot)) delete f.slot; });
   renameOld(d);
-  d.v = 3;
+  if (d.v < 4 && d.set.k === 2700) d.set.k = 2200; // v4: bulk -> cut
+  d.v = 4;
   return d;
 }
 function addBw(D, date, kg, keep){
@@ -129,17 +131,16 @@ function recentExtras(){
   for (let i = 0; i < 21; i++) foodList(key(addDays(new Date(),-i))).forEach((f) => { if (f.slot) return; c[f.n] = (c[f.n]||0)+1; last[f.n] = last[f.n] || f; });
   return Object.keys(c).sort((a,b) => c[b]-c[a]).slice(0,6).map((n) => last[n]);
 }
+function slotOpts(slot, opts){
+  for (let i = 1; i < 21; i++) { const f = eaten(key(addDays(new Date(),-i)), slot); if (f) { const o = opts.find((x) => x[0] === f.n); if (o) return [o, ...opts.filter((x) => x !== o)]; } }
+  return opts;
+}
 // Expected protein by now: linear from 07:00 to 22:00.
 function proteinPace(){ const n = new Date(), h = n.getHours() + n.getMinutes()/60; return DB.set.p * Math.max(0, Math.min(1, (h-7)/15)); }
-// The meal to log next: the first one not eaten whose usual time has not passed, else the first one not eaten.
-const SLOT_END = {breakfast:11, lunch:16, cardio:18, shake:20, dinner:22, bed:26};
-function nextSlot(k){
-  const h = new Date().getHours(), open = MEALS.filter(([id, , optional]) => !optional && !eaten(k, id));
-  return open.find(([id]) => h < SLOT_END[id]) || open[0];
-}
 
 /* ================= training ================= */
 const isDone = (x) => x.done && (num(x.w) > 0 || num(x.r) > 0);
+const setTxt = (x) => num(x.w) ? `${fmt(num(x.w))} × ${num(x.r)}` : `${num(x.r)} reps`; // bodyweight sets have no weight
 function lastPerf(name, exclude){
   for (let i = DB.lifts.length-1; i >= 0; i--) {
     const s = DB.lifts[i]; if (s === exclude) continue;
@@ -201,7 +202,7 @@ function weekDone(){
   return out;
 }
 // Planned weekly sets per muscle, from the program.
-const PLANNED = {}; Object.values(EX).forEach((e) => { PLANNED[e[6]] = (PLANNED[e[6]]||0) + e[1]; });
+const PLANNED = {}; Object.values(PROGRAM).forEach((d) => d.ex.forEach((e) => { PLANNED[e[6]] = (PLANNED[e[6]]||0) + e[1]; }));
 function muscleSets(){
   const mk = key(mondayOf(new Date())), out = {};
   Object.keys(PLANNED).forEach((m) => { out[m] = 0; });
@@ -293,12 +294,13 @@ const Bar = ({v, of, cls=""}) => html`<div class=${"bar " + cls} role="progressb
 /* ================= Today ================= */
 function Today({nav}){
   const k = today(), d = dayRec(k) || {m:"full", h:{}}, t = totals(k), ls = liftStatus(k);
-  const done = doneCount(k), st = streak(), slot = nextSlot(k), gap = proteinPace() - t.p;
-  const [bw, setBw] = useState("");
+  const done = doneCount(k), st = streak(), gap = proteinPace() - t.p, wtr = DB.water[k] || 0;
   const todayBw = DB.bw.find((b) => b.date === k), prevBw = DB.bw.filter((b) => b.date < k).pop();
+  const [bw, setBw] = useState(todayBw || !prevBw ? "" : String(prevBw.kg)); // yesterday's weight prefilled: one tap if unchanged
   const toggle = (h) => { const dd = editDay(k); if (dd.h[h.id]) delete dd.h[h.id]; else dd.h[h.id] = 1; buzz(10); commit(); };
   const trainDue = !ls.rest && ls.done < ls.tot;
-  const missed = MEALS.filter(([id, , optional]) => !optional && !eaten(k, id) && SLOT_END[id] <= new Date().getHours() && (!slot || id !== slot[0]) && (id !== "shake" || ls.done > 0));
+  // Every meal not logged yet, in day order, each one tap. Shake only once training has started.
+  const open = MEALS.filter(([id, , optional]) => !optional && !eaten(k, id) && (id !== "shake" || ls.done > 0 || ls.rest));
   return html`
     <${Title} title="Today" sub=${parseKey(k).toLocaleDateString(undefined,{weekday:"long", day:"numeric", month:"long"})}
       right=${html`<div class="row">${st > 0 && html`<span class="streak" aria-label=${`${st} day streak`}><${Icon} n="flame" s=${16}/>${st}</span>`}
@@ -307,6 +309,7 @@ function Today({nav}){
     <section class="card summary">
       <a class="sumrow" href="#habits"><span class="sl">Habits</span><span class="sv num"><b>${done}</b> / ${HABITS.length}</span><${Bar} v=${done} of=${HABITS.length} cls=${done >= MET ? "good" : ""}/></a>
       <button class="sumrow" onClick=${() => nav.go("food")}><span class="sl">Protein</span><span class="sv num"><b>${Math.round(t.p)}</b> / ${DB.set.p} g</span><${Bar} v=${t.p} of=${DB.set.p} cls=${t.p >= DB.set.p ? "good" : ""}/></button>
+      <button class="sumrow" onClick=${() => { DB.water[k] = wtr + 1; buzz(10); commit(); }} aria-label="Add a glass of water"><span class="sl">Water</span><span class="sv num"><b>${wtr}</b> / ${DB.set.w} · tap +1</span><${Bar} v=${wtr} of=${DB.set.w} cls=${wtr >= DB.set.w ? "good" : ""}/></button>
       <button class="sumrow" onClick=${() => nav.go("train")}><span class="sl">Workout</span><span class="sv num">${ls.rest ? "Rest day" : html`<b>${ls.done}</b> / ${ls.tot} sets`}</span><${Bar} v=${ls.rest ? 1 : ls.done} of=${ls.rest ? 1 : ls.tot} cls=${ls.rest || ls.done >= ls.tot ? "good" : ""}/></button>
     </section>
 
@@ -315,21 +318,15 @@ function Today({nav}){
       ${trainDue && html`<div class="cell">
         <div class="grow"><b>${PROGRAM[ls.day].title}</b><span>${ls.done ? `${ls.done} of ${ls.tot} sets done` : `${PROGRAM[ls.day].ex.length} exercises · about ${minutes(ls.day)} min`}</span></div>
         <button class="btn primary" onClick=${() => nav.openGym()}>${ls.done ? "Resume" : "Start"}</button></div>`}
-      ${slot && html`<div class="cell col">
-        <div><b>${slot[1]}</b><span>Tap what you ate</span></div>
-        <div class="chips">${slot[3].map((o) => html`<button class="chip" onClick=${() => { pickMeal(slot[0], o); buzz(10); toast(`${slot[1]} logged · ${o[1]} g protein`); }}>${o[0]}<em>${o[1]} g</em></button>`)}</div></div>`}
-      ${missed.length > 0 && html`<div class="cell">
-        <div class="grow"><b>${missed.length} earlier ${missed.length > 1 ? "meals" : "meal"} not logged</b><span>${missed.map((m) => m[1]).join(", ")}</span></div>
-        <button class="btn" onClick=${() => nav.go("food")}>Log</button></div>`}
+      ${open.map(([id, label, , opts]) => html`<div class="cell col">
+        <div><b>${label}</b><span>Tap what you ate</span></div>
+        <div class="chips">${slotOpts(id, opts).slice(0, 4).map((o) => html`<button class="chip" onClick=${() => { pickMeal(id, o); buzz(10); toast(`${label} logged · ${o[1]} g protein`); }}>${o[0]}<em>${o[1]} g</em></button>`)}
+          <button class="chip" onClick=${() => nav.go("food")}>Other…</button></div></div>`)}
       ${gap > 20 && html`<div class="cell">
         <div class="grow"><b>${Math.round(gap)} g protein behind schedule</b><span>${TOPUPS[1].n}, ${TOPUPS[1].u}: +${TOPUPS[1].p} g</span></div>
         <button class="btn" onClick=${() => { addExtra(TOPUPS[1]); toast(`+${TOPUPS[1].p} g protein`); }}>Add</button></div>`}
-      ${!trainDue && !slot && !missed.length && gap <= 20 && html`<div class="cell"><div class="grow"><b>Nothing due</b><span>${ls.rest ? "Rest day" : "Workout done"} and meals logged.</span></div></div>`}
+      ${!trainDue && !open.length && gap <= 20 && html`<div class="cell"><div class="grow"><b>Nothing due</b><span>${ls.rest ? "Rest day" : "Workout done"} and meals logged.</span></div></div>`}
     </section>
-
-    ${(DB.lifts.length || Object.keys(DB.days).length) && (!DB.lastExport || Date.now() - DB.lastExport > 7*864e5) && html`<section class="card list backup"><div class="cell">
-      <div class="grow"><b>Back up your data</b><span>${DB.lastExport ? `Last backup ${short(key(new Date(DB.lastExport)))}` : "No backup yet"}. Your logs live only on this phone.</span></div>
-      <button class="btn" onClick=${exportData}>Back up</button></div></section>`}
 
     <div class="shrow" id="habits"><h2 class="sh">Habits</h2>
       <div class="seg" role="group" aria-label="Standard for today">${["full","bare"].map((m) => html`<button class=${d.m === m ? "on" : ""} aria-pressed=${d.m === m} onClick=${() => { editDay(k).m = m; commit(); }}>${m === "full" ? "Full" : "Bare minimum"}</button>`)}</div></div>
@@ -341,8 +338,12 @@ function Today({nav}){
     </section>
     <p class="foot">${done >= MET ? "Today counts toward your streak." : `${MET - done} more to keep the streak. A day counts at 4 of 6.`}</p>
 
+    ${(DB.lifts.length || Object.keys(DB.days).length) && (!DB.lastExport || Date.now() - DB.lastExport > 7*864e5) && html`<section class="card list backup"><div class="cell">
+      <div class="grow"><b>Back up your data</b><span>${DB.lastExport ? `Last backup ${short(key(new Date(DB.lastExport)))}` : "No backup yet"}. Your logs live only on this phone.</span></div>
+      <button class="btn" onClick=${exportData}>Back up</button></div></section>`}
+
     <h2 class="sh">Bodyweight</h2>
-    <form class="card list" onSubmit=${(e) => { e.preventDefault(); if (!num(bw)) return toast("Enter your weight in kg"); addBw(DB, k, bw); setBw(""); toast(`Saved ${num(bw)} kg`); commit(); }}>
+    <form class="card list" onSubmit=${(e) => { e.preventDefault(); if (!num(bw)) return toast("Enter your weight in kg"); addBw(DB, k, bw); toast(`Saved ${num(bw)} kg`); commit(); }}>
       <div class="cell">
         <div class="grow"><b>${todayBw ? `${todayBw.kg} kg today` : "Not logged today"}</b><span>${prevBw ? `Before: ${prevBw.kg} kg on ${short(prevBw.date)}` : "Weigh in after waking up"}</span></div>
         <input class="inp num" type="number" inputmode="decimal" step="0.1" placeholder="kg" value=${bw} onInput=${(e) => setBw(e.target.value)} aria-label="Bodyweight in kg"/>
@@ -393,7 +394,7 @@ function ExerciseDetail({name, nav}){
     <section class="card pad"><${LineChart} pts=${e1History(name)} unit="kg" label="Estimated one-rep max"/></section>
     <h2 class="sh">History</h2>
     <section class="card list">${hist.length ? hist.slice(0, 12).map(({s, ex}) => html`<div class="cell">
-      <div class="grow"><b>${longDate(s.date)}</b><span class="num">${ex.sets.filter(isDone).map((x) => `${fmt(num(x.w))} × ${num(x.r)}`).join(", ")}</span></div>
+      <div class="grow"><b>${longDate(s.date)}</b><span class="num">${ex.sets.filter(isDone).map(setTxt).join(", ")}</span></div>
       ${ex.sets.some((x) => x.pr) && html`<span class="tag gold">PR</span>`}</div>`) : html`<div class="cell"><div class="grow"><span>No sets logged yet.</span></div></div>`}</section>`;
 }
 
@@ -402,8 +403,8 @@ function Gym({day, start, close}){
   const p = PROGRAM[day];
   const existing = DB.lifts.find((s) => s.date === today() && s.day === day);
   const firstOpen = (r) => { if (start) { const n = r.exercises.findIndex((e) => e.name === start); if (n >= 0) return n; } const n = r.exercises.findIndex((e) => e.sets.some((x) => !x.done)); return n < 0 ? 0 : n; };
-  const [rec, setRec] = useState(existing || null);
-  const [i, setI] = useState(() => existing ? firstOpen(existing) : 0);
+  const [rec] = useState(() => existing || newSession(day, "normal"));
+  const [i, setI] = useState(() => firstOpen(rec));
   const [edit, setEdit] = useState(null);
   const [rest, setRest] = useState(null);
   const [now, setNow] = useState(Date.now());
@@ -412,12 +413,6 @@ function Gym({day, start, close}){
   const [, force] = useReducer((x) => x+1, 0);
   useEffect(() => { if (!rest) return; const t = setInterval(() => setNow(Date.now()), 250); return () => clearInterval(t); }, [rest]);
   useEffect(() => { document.body.classList.add("lock"); return () => document.body.classList.remove("lock"); }, []);
-
-  if (!rec) return html`<div class="gym"><div class="gbar"><button class="iconbtn" onClick=${close} aria-label="Close"><${Icon} n="close"/></button><b class="grow center">${p.title}</b><span class="iconbtn"></span></div>
-    <div class="gbody"><h1 class="gh">How do you feel?</h1><p class="muted">This sets today's weights.</p>
-    <section class="card list">${[["fresh","Good","Full plan. Push for the top of the rep range."],["normal","Okay","Full plan."],["rough","Tired or sore","One set fewer per exercise, 5% lighter."]].map(([v,l,s]) => html`
-      <button class="cell" onClick=${() => { const r = newSession(day, v); setRec(r); setI(firstOpen(r)); }}><div class="grow"><b>${l}</b><span>${s}</span></div><${Icon} n="chev" s=${16}/></button>`)}</section>
-    ${isDeloadWeek() && html`<p class="note">Deload week: half the sets at 90%.</p>`}</div></div>`;
 
   if (summary) {
     let sets = 0, vol = 0; const prs = [];
@@ -444,7 +439,11 @@ function Gym({day, start, close}){
     r: setObj && setObj.r !== "" ? setObj.r : lastSet ? lastSet.r : String(pr.r)};
   const setVal = (f, x) => setValRaw({...v, [f]: x});
   const step = (f, d) => setVal(f, String(Math.max(0, r1(num(v[f]) + d))));
-  const finish = () => { rec.finished = true; save(); setRest(null); setSummary(true); };
+  const finish = () => { rec.finished = true; if (rec.date === today() && rec.exercises.some((x) => x.sets.some(isDone))) editDay(rec.date).h.workout = 1; save(); setRest(null); setSummary(true); };
+  // Low energy: one set fewer on every exercise still open, 5% lighter (prescribe reads rec.ready).
+  const lighter = () => { rec.ready = "rough"; rec.exercises.forEach((x) => { if (x.sets.length > 1 && !x.sets[x.sets.length-1].done) x.sets.pop(); }); save(); toast("Lighter plan: one set fewer, 5% less weight"); force(); };
+  // Station taken: swap to the alternative and back, only before any set of it is logged.
+  const swap = () => { ex.name = e[7]; save(); setValRaw({k:"", w:"", r:""}); force(); };
   const goEx = (j) => { setI(j); setEdit(null); };
   const logSet = () => {
     if (!num(v.r)) return toast("Enter reps first");
@@ -474,6 +473,8 @@ function Gym({day, start, close}){
     <div class="gbody">
       <h1 class="gh">${ex.name}</h1>
       <p class="muted">${pr.sets} sets × ${e[2]} reps · rest ${e[3]}</p>
+      <div class="row">${e[7] && !ex.sets.some((x) => x.done) && html`<button class="link" onClick=${swap}>Station taken? Do ${e[7]}</button>`}
+        ${rec.ready !== "rough" && !rec.deload && html`<button class="link" onClick=${lighter}>Low energy? Go lighter</button>`}</div>
       ${e[5] && html`<p class="cue">${e[5]}</p>`}
       <p class=${"why" + (pr.up ? " up" : "")}>${pr.why}</p>
 
@@ -481,8 +482,8 @@ function Gym({day, start, close}){
         <div class="shead"><span>Set</span><span>Last time</span><span>Today</span><span></span></div>
         ${ex.sets.map((s, j) => { const prev = pr.last && pr.last.sets[j]; return html`
           <button class=${"srow" + (j === cur ? " cur" : "") + (s.done ? " done" : "") + (s.pr ? " pr" : "")} onClick=${() => s.done && setEdit(edit === j ? null : j)} disabled=${!s.done && j !== cur}>
-            <span class="num">${j+1}</span><span class="num muted">${prev ? `${fmt(num(prev.w))} × ${num(prev.r)}` : "–"}</span>
-            <span class="num">${s.done ? `${fmt(num(s.w))} × ${num(s.r)}` : j === cur ? "Now" : ""}</span>
+            <span class="num">${j+1}</span><span class="num muted">${prev ? setTxt(prev) : "–"}</span>
+            <span class="num">${s.done ? setTxt(s) : j === cur ? "Now" : ""}</span>
             <span class="st">${s.pr ? "PR" : s.done ? html`<${Icon} n="check" s=${16}/>` : ""}</span></button>`; })}
         <div class="srowbtns"><button class="link" onClick=${() => { ex.sets.push({w:"", r:"", done:false}); save(); force(); }}>Add a set</button>
           ${ex.sets.length > 1 && !ex.sets[ex.sets.length-1].done && html`<button class="link" onClick=${() => { ex.sets.pop(); save(); force(); }}>Remove a set</button>`}</div>
@@ -499,10 +500,8 @@ function Gym({day, start, close}){
           <input class="num" type="number" inputmode="numeric" value=${v.r} placeholder="0" onInput=${(ev) => setVal("r", ev.target.value)} aria-label="Reps"/>
           <button onClick=${() => step("r", 1)} aria-label="One rep more"><${Icon} n="plus" s=${22}/></button></div></div>
       </div>
-      <button class="btn primary wide big" onClick=${logSet}>${edit != null ? `Save set ${cur+1}` : `Log set ${cur+1}`}</button>
+      <button class="btn primary wide big" onClick=${logSet}>${edit != null ? `Save set ${cur+1}` : `Log ${num(v.w) ? `${v.w} kg × ` : ""}${v.r || 0} reps`}</button>
       ${edit != null && html`<button class="link center" onClick=${() => { Object.assign(ex.sets[edit], {done:false, pr:false}); setEdit(null); save(); }}>Clear set ${edit+1}</button>`}`}
-      <div class="gnav"><button class="link" disabled=${i === 0} onClick=${() => goEx(i-1)}><${Icon} n="back" s=${18}/>Previous</button>
-        <button class="link" disabled=${i === rec.exercises.length-1} onClick=${() => goEx(i+1)}>Next<${Icon} n="chev" s=${18}/></button></div>
     </div>
     ${rest && html`<div class=${"restbar" + (left === 0 ? " go" : "")} role="timer">
       <div class="rfill" style=${`width:${rest.total ? 100*(1-left/rest.total) : 100}%`}></div>
@@ -515,17 +514,20 @@ function Gym({day, start, close}){
 /* ================= Food ================= */
 function Food(){
   const k = today(), t = totals(k), S = DB.set, wtr = DB.water[k] || 0;
-  const [q, setQ] = useState(""), [custom, setCustom] = useState(null);
+  const [q, setQ] = useState(""), [custom, setCustom] = useState(null), [more, setMore] = useState({});
   const list = foodList(k), extras = list.filter((f) => !f.slot);
   const ql = q.trim().toLowerCase();
-  const pool = [...DB.custom, ...TOPUPS, ...FOODS].filter((f, j, a) => a.findIndex((x) => x.n === f.n) === j);
+  const dishes = MEALS.flatMap((m) => m[3].map((o) => ({n:o[0], u:"", p:o[1], k:o[2]})));
+  const pool = [...DB.custom, ...TOPUPS, ...FOODS, ...dishes].filter((f, j, a) => a.findIndex((x) => x.n === f.n) === j);
   const recent = recentExtras();
   const res = ql ? pool.filter((f) => f.n.toLowerCase().includes(ql)).slice(0, 12) : recent.length ? recent : TOPUPS.slice(0, 4);
   const yest = foodList(key(addDays(new Date(), -1)));
   const add = (f) => { addExtra(f); buzz(8); toast(`Added ${f.n}`); };
-  const left = Math.max(0, S.p - t.p);
+  const left = Math.max(0, S.p - t.p), kLeft = Math.round(S.k - t.k);
+  // No match: the add form opens with the search text as the name.
+  const form = custom || (ql && !res.length ? {n:q.trim(), k:"", p:""} : null);
   return html`
-    <${Title} title="Food" sub=${left ? `${Math.round(left)} g protein to go` : "Protein target hit"}/>
+    <${Title} title="Food" sub=${`${left ? `${Math.round(left)} g protein to go` : "Protein target hit"} · ${kLeft >= 0 ? `${kLeft} kcal left` : `${-kLeft} kcal over`}`}/>
     <section class="card pad macros">
       <div class="mrow"><span class="sl">Protein</span><span class="num"><b>${Math.round(t.p)}</b> / ${S.p} g</span></div>
       <div class=${"bar tall" + (t.p >= S.p ? " good" : "")}><i style=${`width:${Math.min(100, 100*t.p/S.p)}%`}></i><em style=${`left:${Math.min(100, 100*proteinPace()/S.p)}%`}></em></div>
@@ -537,23 +539,24 @@ function Food(){
     </section>
     ${!list.length && yest.length > 0 && html`<button class="btn wide" onClick=${() => { DB.food[k] = yest.map((f) => ({...f})); toast("Copied yesterday's meals"); commit(); }}>Same as yesterday (${yest.length} ${yest.length > 1 ? "items" : "item"})</button>`}
 
-    ${MEALS.map(([id, label, optional, opts]) => { const got = eaten(k, id); return html`
+    ${MEALS.map(([id, label, optional, opts]) => { const got = eaten(k, id); let ord = slotOpts(id, opts); if (got) ord = [...ord.filter((o) => o[0] === got.n), ...ord.filter((o) => o[0] !== got.n)]; return html`
       <div class="shrow"><h2 class="sh">${label}${optional ? html` <small>optional</small>` : ""}</h2>${got && html`<span class="tag good">${got.p} g logged</span>`}</div>
-      <section class="card list">${opts.map((o) => { const on = got && got.n === o[0]; return html`
+      <section class="card list">${(more[id] ? ord : ord.slice(0, 4)).map((o) => { const on = got && got.n === o[0]; return html`
         <button class=${"cell pick" + (on ? " on" : "")} onClick=${() => { pickMeal(id, o); buzz(10); rerender(); }} aria-pressed=${!!on}>
           <span class="radio">${on && html`<${Icon} n="check" s=${14}/>`}</span>
-          <span class="grow"><b>${o[0]}</b></span><span class="val num">${o[1]} g<small>${o[2]} kcal</small></span></button>`; })}</section>`; })}
+          <span class="grow"><b>${o[0]}</b></span><span class="val num">${o[1]} g<small>${o[2]} kcal</small></span></button>`; })}
+        ${!more[id] && ord.length > 4 && html`<button class="cell" onClick=${() => setMore({...more, [id]:1})}><span class="grow"><span>All ${ord.length} dishes</span></span><${Icon} n="chev" s=${16}/></button>`}</section>`; })}
 
     <h2 class="sh">Anything else</h2>
     <section class="card pad">
       <input class="search" type="search" placeholder="Search: egg, paneer, roti, whey" value=${q} onInput=${(e) => setQ(e.target.value)} aria-label="Search foods"/>
       ${!ql && html`<p class="hint">${recent.length ? "Recent" : "Quick protein"}</p>`}
       <div class="chips">${res.map((f) => html`<button class="chip" onClick=${() => add(f)}>${f.n}<em>${r1(f.p)} g</em></button>`)}</div>
-      ${ql && !res.length && html`<p class="hint">No match. Add it as your own food.</p>`}
-      ${custom ? html`<form class="custom" onSubmit=${(e) => { e.preventDefault(); if (!custom.n.trim() || !num(custom.k)) return toast("Name and calories are needed"); const f = {n:custom.n.trim(), u:"", k:num(custom.k), p:num(custom.p)}; DB.custom = [f, ...DB.custom.filter((x) => x.n !== f.n)]; setCustom(null); setQ(""); add(f); }}>
-          <input placeholder="Food name" value=${custom.n} onInput=${(e) => setCustom({...custom, n:e.target.value})} aria-label="Food name"/>
-          <input class="num" type="number" inputmode="numeric" placeholder="kcal" value=${custom.k} onInput=${(e) => setCustom({...custom, k:e.target.value})} aria-label="Calories"/>
-          <input class="num" type="number" inputmode="decimal" placeholder="Protein g" value=${custom.p} onInput=${(e) => setCustom({...custom, p:e.target.value})} aria-label="Protein in grams"/>
+      ${ql && !res.length && html`<p class="hint">No match. Add it: protein is enough, calories if you know them.</p>`}
+      ${form ? html`<form class="custom" onSubmit=${(e) => { e.preventDefault(); if (!form.n.trim()) return toast("Name it first"); const f = {n:form.n.trim(), u:"", k:num(form.k), p:num(form.p)}; DB.custom = [f, ...DB.custom.filter((x) => x.n !== f.n)]; setCustom(null); setQ(""); add(f); }}>
+          <input placeholder="Food name" value=${form.n} onInput=${(e) => setCustom({...form, n:e.target.value})} aria-label="Food name"/>
+          <input class="num" type="number" inputmode="decimal" placeholder="Protein g" value=${form.p} onInput=${(e) => setCustom({...form, p:e.target.value})} aria-label="Protein in grams"/>
+          <input class="num" type="number" inputmode="numeric" placeholder="kcal (optional)" value=${form.k} onInput=${(e) => setCustom({...form, k:e.target.value})} aria-label="Calories, optional"/>
           <button class="btn primary">Add</button></form>`
         : html`<button class="link" onClick=${() => setCustom({n:q, k:"", p:""})}>Add your own food</button>`}
     </section>
