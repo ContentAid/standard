@@ -335,8 +335,8 @@ function Today({nav}){
   const fold = (g) => setOpen({...open, [g]: !open[g]});
   const toggle = (h) => { const dd = editDay(k); if (dd.h[h.id]) delete dd.h[h.id]; else dd.h[h.id] = 1; buzz(10); commit(); };
   const saveBw = (kg) => { if (!num(kg)) return toast("Enter your weight in kg"); addBw(DB, k, kg); setBw(null); buzz(10); toast(`Saved ${num(kg)} kg`); commit(); };
-  // Food: every meal not logged yet, its usual dish one tap away. Shake once training has started.
-  const meals = MEALS.filter(([id, , optional]) => !optional && !eaten(k, id) && (id !== "shake" || ls.done > 0 || ls.rest));
+  // Food: every meal not logged yet, its usual dish one tap away.
+  const meals = MEALS.filter(([id, , optional]) => !optional && !eaten(k, id));
   const logged = foodList(k);
   const trained = ls.rest || ls.done >= ls.tot*.75;
   const habits = HABITS.filter((h) => !h.auto), hDone = habits.filter((h) => habitDone(k, h));
@@ -353,6 +353,7 @@ function Today({nav}){
       <button class=${"statc k" + (t.k > S.k ? " over" : "")} onClick=${() => nav.go("food")}><span class="l">Calories</span><b>${Math.round(t.k)}</b><span class="of">${t.k > S.k ? `${Math.round(t.k - S.k)} over ${S.k}` : `of ${S.k} kcal`}</span><div class="trk"><i style=${`width:${Math.min(100, 100*t.k/S.k)}%`}></i></div></button>
     </div>
 
+    <${Coach}/>
     <div class="grp"><h2 class="gh2">Food<small>${logged.length} logged</small></h2><section class="card">
       ${meals.map(([id, label, , opts]) => { const o = slotOpts(id, opts)[0]; return html`<div class="do">
         <button class="t" onClick=${() => { pickMeal(id, o); buzz(10); toast(`${label} logged · ${o[1]} g protein`); }}><b>${label}</b><span>${o[0]}</span></button>
@@ -462,13 +463,10 @@ function Gym({day, start, close}){
   if (summary) {
     let sets = 0, vol = 0; const prs = [];
     rec.exercises.forEach((x) => x.sets.forEach((s) => { if (isDone(s)) { sets++; vol += num(s.w)*num(s.r); if (s.pr) prs.push(`${x.name}: ${fmt(num(s.w))} kg × ${num(s.r)}`); } }));
-    const shake = MEALS.find((m) => m[0] === "shake");
     return html`<div class="gym"><div class="gbody">
       <h1 class="gh">Workout saved</h1><p class="muted">${p.title} · ${longDate(rec.date)}</p>
       <section class="card stats3"><div><b class="num">${sets}</b><span>sets</span></div><div><b class="num">${Math.round(vol).toLocaleString()}</b><span>kg lifted</span></div><div><b class="num">${prs.length}</b><span>new bests</span></div></section>
       ${prs.length > 0 && html`<section class="card list">${prs.map((x) => html`<div class="cell"><span class="tag gold">PR</span><div class="grow"><b>${x}</b></div></div>`)}</section>`}
-      ${shake && !eaten(today(), "shake") && html`<section class="card list"><div class="cell"><div class="grow"><b>Post-workout shake</b><span>${shake[3][0][0]} · ${shake[3][0][1]} g protein</span></div>
-        <button class="btn" onClick=${() => { pickMeal("shake", shake[3][0]); toast("Shake logged"); force(); }}>Log</button></div></section>`}
       <button class="btn primary wide" onClick=${close}>Done</button></div></div>`;
   }
 
@@ -655,6 +653,35 @@ function pace(avg){
   const sl = xs.reduce((s,x,i) => s + (x-mx)*(a[i].y-my), 0) / xs.reduce((s,x) => s + (x-mx)**2, 0);
   return sl * 7;
 }
+const round50 = (n) => Math.round(n/50)*50;
+// 1 kg of fat is about 7700 kcal, so 1 kg/week is 1100 kcal/day.
+// ponytail: fixed 7700 kcal/kg and +-300 kcal steps; fit intake against the trend once food logs are complete.
+function coach(avg){
+  const S = DB.set, now = avg[avg.length-1], goal = S.goalKg || (S.lean ? S.lean / .85 : null);
+  if (!now || !goal || !S.goalDate) return null;
+  const weeks = (parseKey(S.goalDate) - parseKey(today())) / (7*864e5), togo = now.y - goal;
+  if (togo <= 0) return {tone:"good", msg:`Goal reached: ${fmt(now.y)} kg. Set the next goal in Settings.`};
+  if (weeks <= 0) return {tone:"warn", msg:`Goal date passed with ${fmt(togo)} kg to go. Set a new date in Settings.`};
+  const need = togo / weeks, cap = now.y * .01, wk = pace(avg); // kg/week; 1% of bodyweight a week is the muscle-safe ceiling
+  const by = parseKey(S.goalDate).toLocaleDateString(undefined,{day:"numeric", month:"short"});
+  const fast = need > cap ? ` That's faster than the safe ${fmt(cap)} kg/week, so expect to land a bit after ${by}.` : "";
+  if (wk == null) {
+    const tdee = S.lean ? (370 + 21.6*S.lean) * 1.6 : null; // Katch-McArdle x 1.6 for daily training: a first guess the trend corrects
+    const kcal = tdee ? Math.max(1500, round50(tdee - Math.min(need, cap)*1100)) : null;
+    return {tone:"info", kcal, msg:`${fmt(goal)} kg by ${by} needs ${fmt(need)} kg/week.${kcal ? ` Start at about ${kcal} kcal.` : ""}${fast} Verdict after a week of daily weigh-ins.`};
+  }
+  const lost = -wk;
+  if (lost > cap*1.1) { const kcal = S.k + round50(Math.min(300, (lost - cap)*1100)); return {tone:"warn", kcal, msg:`Losing ${fmt(lost)} kg/week: too fast, you risk losing muscle. Eat ${kcal} kcal (+${kcal - S.k}).`}; }
+  if (lost >= need*.9) return {tone:"good", msg:`On track: losing ${fmt(lost)} kg/week, ${by} needs ${fmt(need)}. Keep ${S.k} kcal.${fast}`};
+  const kcal = Math.max(1500, S.k - round50(Math.min(300, Math.max(50, (need - lost)*1100))));
+  return {tone:"bad", kcal, msg:`Behind: ${lost > 0 ? `losing ${fmt(lost)} kg/week` : "not losing yet"}, ${by} needs ${fmt(need)}. Eat ${kcal} kcal (${kcal - S.k}).${fast}`};
+}
+function Coach(){
+  const c = coach(bwAvg());
+  if (!c) return null;
+  return html`<section class=${"coach " + c.tone}><p>${c.msg}</p>
+    ${c.kcal && c.kcal !== DB.set.k && html`<button class="btn" onClick=${() => { DB.set.k = c.kcal; toast(`Target ${c.kcal} kcal`); commit(); }}>Set ${c.kcal} kcal</button>`}</section>`;
+}
 function CutHero({avg}){
   const S = DB.set, now = avg[avg.length-1], wk = pace(avg);
   if (!now) return html`<section class="hero"><span class="l">Cut</span><b>– kg</b><span class="s">Log your weight on Today to start the trend.</span></section>`;
@@ -738,6 +765,7 @@ function Progress({nav}){
   const maxSets = Math.max(20, ...Object.values(ms), ...Object.values(PLANNED));
   return html`<${Title} title="Progress"/>
     <${CutHero} avg=${avg}/>
+    <${Coach}/>
     <h2 class="gh2">This week<small>Mon–Sun</small></h2>
     <${WeekGrid}/>
     <h2 class="gh2">Eating<small>last 14 days</small></h2>
@@ -792,6 +820,8 @@ function Settings({nav}){
     <section class="card list">
       <label class="cell"><div class="grow"><b>Body fat now</b><span>${S.lean ? `Lean mass ${fmt(S.lean)} kg, from your 7-day average weight` : "Sets your lean mass for the goal weight"}</span></div>
         <input class="inp num" type="number" inputmode="decimal" placeholder="%" onChange=${(e) => { const bf = num(e.target.value), a = bwAvg().pop(); if (!a) return toast("Log your weight first"); if (bf > 3 && bf < 60) { S.lean = r1(a.y * (1 - bf/100)); save(); toast(`Lean mass ${fmt(S.lean)} kg`); rerender(); } }}/><span class="unit">%</span></label>
+      <label class="cell"><div class="grow"><b>Goal date</b><span>The coach on Today checks your pace against it</span></div>
+        <input class="inp date" type="date" value=${S.goalDate || ""} onChange=${(e) => { S.goalDate = e.target.value; save(); toast("Saved"); rerender(); }}/></label>
       <label class="cell"><div class="grow"><b>Goal weight</b><span>${S.goalKg && S.lean ? `About ${Math.round(100*(1 - S.lean/S.goalKg))}% body fat at that weight` : S.lean ? `Empty: ${fmt(S.lean/.85)} kg, which is 15% body fat` : "Set your body fat first"}</span></div>
         <input class="inp num" type="number" inputmode="decimal" step="0.5" placeholder="kg" value=${S.goalKg || ""} onChange=${(e) => setT("goalKg", e.target.value)}/><span class="unit">kg</span></label>
     </section>
