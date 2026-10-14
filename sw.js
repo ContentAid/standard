@@ -1,5 +1,5 @@
 // Network first, cache as the offline fallback: a deploy shows on the next open, and the gym with no signal still works.
-const CACHE = "standard-v4";
+const CACHE = "standard-v5";
 const SHELL = ["./", "./index.html", "./app.js", "./data.js", "./vendor/preact-htm.js", "./vendor/inter-latin-400-normal.woff2", "./vendor/inter-latin-600-normal.woff2", "./vendor/inter-latin-800-normal.woff2", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 self.addEventListener("install", (e) => e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener("activate", (e) => e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())));
