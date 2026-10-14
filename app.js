@@ -30,7 +30,7 @@ const mondayOf = (d) => addDays(d, d.getDay() === 0 ? -6 : 1-d.getDay());
 
 /* ================= storage ================= */
 const LS = "standard-v1";
-function blank(){ return {v:4, days:{}, food:{}, water:{}, bw:[], lifts:[], custom:[], set:{p:150, k:2200, w:8}}; }
+function blank(){ return {v:4, days:{}, food:{}, water:{}, bw:[], lifts:[], custom:[], set:{p:100, k:2200, w:8}}; }
 // v1/v2 kept habits as d:[4 flags]; v3 keys them by habit id. The old score is kept so past streaks still count.
 const OLD_ORDER = ["deep","workout","read","steps"];
 function migrateDay(d){
@@ -50,7 +50,7 @@ function norm(d){
   const slots = new Set(MEALS.map((m) => m[0]));
   for (const k in d.food) d.food[k].forEach((f) => { if (f.slot && !slots.has(f.slot)) delete f.slot; });
   renameOld(d);
-  if (d.v < 4 && d.set.k === 2700) d.set.k = 2200; // v4: bulk -> cut
+  if (d.v < 4) { if (d.set.k === 2700) d.set.k = 2200; if (d.set.p === 150) d.set.p = 100; } // v4: bulk -> cut
   d.v = 4;
   return d;
 }
