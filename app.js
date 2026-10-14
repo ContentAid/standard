@@ -616,27 +616,6 @@ function Food(){
 // Single-series charts: one hue, recessive axes, tap a mark to read its value.
 // Bar with a 4px rounded top, square on the baseline.
 function barPath(x, base, w, h){ if (h <= 0) return ""; const r = Math.min(4, w/2, h); return `M${x},${base}V${base-h+r}Q${x},${base-h} ${x+r},${base-h}H${x+w-r}Q${x+w},${base-h} ${x+w},${base-h+r}V${base}Z`; }
-function BarChart({data, target, unit, label}){
-  const [sel, setSel] = useState(null);
-  const W = 340, H = 150, P = {l:30, r:6, t:10, b:22};
-  const max = Math.max(target || 0, ...data.map((d) => d.v)) * 1.1 || 1;
-  const bw = (W - P.l - P.r) / data.length;
-  const Y = (v) => H - P.b - (H - P.t - P.b) * v / max;
-  const ticks = [0, Math.round(max/2/10)*10];
-  const s = sel != null ? data[sel] : null;
-  return html`<div class="chart">
-    <p class="readout num" aria-live="polite">${s ? html`<b>${Math.round(s.v)} ${unit}</b> · ${s.label}` : html`<span class="muted">Tap a bar for the day's total</span>`}</p>
-    <svg viewBox=${`0 0 ${W} ${H}`} role="img" aria-label=${label}>
-      ${ticks.map((t) => html`<g><line x1=${P.l} x2=${W-P.r} y1=${Y(t)} y2=${Y(t)} class="grid"/><text x=${P.l-6} y=${Y(t)+3.5} text-anchor="end" class="ax">${t}</text></g>`)}
-      ${data.map((d, j) => { const h = Math.max(d.v ? 3 : 0, (H - P.t - P.b) * d.v / max); return html`<g onClick=${() => setSel(sel === j ? null : j)} class="hit">
-        <rect x=${P.l + j*bw} y=${P.t} width=${bw} height=${H-P.t-P.b} fill="transparent"/>
-        <path class=${"bm" + (target && d.v >= target ? " met" : "") + (sel === j ? " sel" : "")} d=${barPath(P.l + j*bw + 2, Y(0), bw - 4, h)}/></g>`; })}
-      ${target && html`<line x1=${P.l} x2=${W-P.r} y1=${Y(target)} y2=${Y(target)} class="target"/><text x=${P.l-6} y=${Y(target)+3.5} text-anchor="end" class="ax strong">${target}</text>`}
-      ${data.map((d, j) => j % 2 ? null : html`<text x=${P.l + j*bw + bw/2} y=${H-6} text-anchor="middle" class="ax">${d.tick}</text>`)}
-    </svg>
-    ${target && html`<p class="legend"><i class="sw met"></i>Target hit <i class="sw"></i>Under target <i class="dash"></i>${target} ${unit} target</p>`}</div>`;
-}
-
 function LineChart({pts, unit, label, avg}){
   const [sel, setSel] = useState(null);
   if (pts.length < 2) return html`<p class="muted small">${pts.length ? "One entry so far. The line appears after two." : "No data yet."}</p>`;
@@ -662,75 +641,130 @@ function LineChart({pts, unit, label, avg}){
     ${avg && html`<p class="legend"><i class="ln2"></i>7-day average <i class="ln2 faint"></i>Daily weigh-ins</p>`}</div>`;
 }
 
-/* ================= Progress ================= */
-function Progress({nav}){
-  const [view, setView] = useState("overview");
-  return html`<${Title} title="Progress"/>
-    <div class="seg wide" role="tablist">${[["overview","Overview"],["strength","Strength"],["body","Body"]].map(([v,l]) => html`<button role="tab" aria-selected=${view === v} class=${view === v ? "on" : ""} onClick=${() => setView(v)}>${l}</button>`)}</div>
-    ${view === "overview" && html`<${Overview}/>`}${view === "strength" && html`<${Strength} nav=${nav}/>`}${view === "body" && html`<${Body}/>`}`;
+/* ================= Progress (mockup rated 8+) ================= */
+// Trailing 7-day average of weigh-ins: smooths out day-to-day water weight.
+function bwAvg(){
+  const pts = DB.bw.slice(-120).map((b) => ({x:b.date, y:b.kg}));
+  return pts.map((p) => { const t = parseKey(p.x).getTime(); const w = pts.filter((q) => { const d = (t - parseKey(q.x).getTime())/864e5; return d >= 0 && d < 7; }); return {x:p.x, y:w.reduce((a,q) => a+q.y, 0)/w.length}; });
 }
-function Overview(){
-  const now = new Date(), tk = today(), mon = mondayOf(now);
-  const days7 = Array.from({length:7}, (_, j) => key(addDays(mon, j))).filter((k) => k <= tk);
-  const wd = Object.keys(weekDone()).length;
-  const avgP = days7.reduce((a,k) => a + totals(k).p, 0) / (days7.length || 1);
-  const met = days7.filter(dayMet).length;
+// kg per week from a least-squares line through the last 21 days of averages; null until a week of data.
+function pace(avg){
+  const cut = key(addDays(new Date(), -21)), a = avg.filter((p) => p.x >= cut);
+  if (a.length < 3 || (parseKey(a[a.length-1].x) - parseKey(a[0].x)) / 864e5 < 7) return null;
+  const xs = a.map((p) => parseKey(p.x) / 864e5), mx = xs.reduce((s,x) => s+x, 0)/xs.length, my = a.reduce((s,p) => s+p.y, 0)/a.length;
+  const sl = xs.reduce((s,x,i) => s + (x-mx)*(a[i].y-my), 0) / xs.reduce((s,x) => s + (x-mx)**2, 0);
+  return sl * 7;
+}
+function CutHero({avg}){
+  const S = DB.set, now = avg[avg.length-1], wk = pace(avg);
+  if (!now) return html`<section class="hero"><span class="l">Cut</span><b>– kg</b><span class="s">Log your weight on Today to start the trend.</span></section>`;
+  const goal = S.lean ? S.lean / (1 - (S.goalBf || 15)/100) : null;
+  const togo = goal ? now.y - goal : null;
+  const weeks = togo > 0 && wk < 0 ? Math.min(104, togo / -wk) : null;
+  const eta = weeks != null ? addDays(parseKey(now.x), Math.round(weeks*7)) : null;
+  // Chart: averages so far, dashed line to the goal at the current pace.
+  const W = 320, H = 120, end = eta || addDays(parseKey(now.x), 28);
+  const t0 = parseKey(avg[0].x).getTime(), span = (end.getTime() - t0) || 1;
+  const lo = Math.min(goal || Infinity, ...avg.map((p) => p.y)) - .5, hi = Math.max(...avg.map((p) => p.y)) + .5;
+  const X = (t) => 4 + (W-8) * (t - t0) / span, Y = (v) => 8 + (H-24) * (hi - v) / (hi - lo);
+  const line = avg.map((p) => `${X(parseKey(p.x).getTime()).toFixed(1)},${Y(p.y).toFixed(1)}`).join(" ");
+  const nx = X(parseKey(now.x).getTime()), ny = Y(now.y);
+  return html`<section class="hero">
+    <span class="l">Cut · to ${S.goalBf || 15}% body fat</span>
+    <b class="num">${fmt(now.y)} kg</b>
+    <span class="s">${!goal ? "Enter your body fat % in Settings to see your goal weight." : togo <= 0 ? "Goal weight reached." :
+      `Goal about ${fmt(goal)} kg · ${fmt(togo)} kg to go · ${eta ? `on pace for ${eta.toLocaleDateString(undefined,{day:"numeric", month:"short", year:"numeric"})}` : wk == null ? "pace shows after a week of weigh-ins" : "not losing yet"}`}</span>
+    <svg viewBox=${`0 0 ${W} ${H}`} role="img" aria-label="Weight trend and projection to goal">
+      ${goal && html`<line x1="0" x2=${W} y1=${Y(goal)} y2=${Y(goal)} class="goalln"/><text x=${W-2} y=${Y(goal)-5} text-anchor="end" class="goaltx">${fmt(goal)} goal</text>`}
+      ${eta && html`<polyline points=${`${nx},${ny} ${X(end.getTime())},${Y(goal)}`} class="proj"/>`}
+      <polyline points=${line} class="avgln"/>
+      <circle cx=${nx} cy=${ny} r="5" class="nowdot"/>
+    </svg>
+    <p class="legend inv"><span><i class="sw acc"></i>7-day average</span>${eta && html`<span>- - projection at your real pace</span>`}</p>
+  </section>
+  <div class="tiles">
+    <div class="tile"><b class="num">${S.lean ? `${Math.round(100*(1 - S.lean/now.y))}%` : "–"}</b><span>est. body fat</span></div>
+    <div class="tile"><b class="num">${wk == null ? "–" : `${wk > 0 ? "+" : ""}${fmt(wk)}`}</b><span>kg / week</span></div>
+    <div class="tile"><b class="num">${S.lean ? fmt(S.lean) : "–"}</b><span>kg lean mass</span></div>
+  </div>`;
+}
+// One row per goal, one cell per day: green hit, pale close, empty missed or not yet.
+function WeekGrid(){
+  const mon = mondayOf(new Date()), tk = today(), S = DB.set;
+  const days = Array.from({length:7}, (_, j) => key(addDays(mon, j)));
+  const cardio = HABITS.find((h) => h.id === "steps");
+  const rows = [
+    ["Gym", (k) => DB.lifts.some((s) => s.date === k && s.exercises.some((e) => e.sets.some(isDone))) ? 2 : 0],
+    ["Protein", (k) => { const p = totals(k).p; return p >= S.p ? 2 : p >= S.p*.8 ? 1 : 0; }],
+    ["Calories", (k) => { const c = totals(k).k; return !c ? 0 : c <= S.k ? 2 : c <= S.k*1.1 ? 1 : 0; }],
+    ["Cardio", (k) => cardio && habitDone(k, cardio) ? 2 : 0],
+    ["Habits", (k) => { const n = doneCount(k); return n >= MET ? 2 : n >= 2 ? 1 : 0; }]];
+  return html`<section class="card pad"><div class="wgrid">
+    <span></span>${days.map((k) => html`<span class=${"h" + (k === tk ? " td" : "")}>${DAYS[parseKey(k).getDay()][0]}</span>`)}
+    ${rows.map(([l, f]) => html`<span>${l}</span>${days.map((k) => { const v = k > tk ? 0 : f(k); return html`<i class=${v === 2 ? "ok" : v === 1 ? "part" : ""} title=${`${l} ${short(k)}`}></i>`; })}`)}
+  </div><p class="legend"><span><i class="sw ok"></i>Hit</span><span><i class="sw part"></i>Close</span><span><i class="sw"></i>Missed or ahead</span></p></section>`;
+}
+function KcalChart(){
+  const [sel, setSel] = useState(null), S = DB.set, now = new Date();
+  const data = Array.from({length:14}, (_, j) => { const k = key(addDays(now, j-13)), t = totals(k); return {k, v:t.k, p:t.p}; });
+  const W = 320, H = 130, max = Math.max(S.k*1.15, ...data.map((d) => d.v)), bw = W / 14;
+  const Y = (v) => H - 4 - (H - 14) * v / max, s = sel != null ? data[sel] : null;
+  return html`<div class="chart">
+    <p class="readout num" aria-live="polite">${s ? html`<b>${Math.round(s.v)} kcal · ${Math.round(s.p)} g protein</b> · ${longDate(s.k)}` : html`<span class="muted">Tap a day for calories and protein</span>`}</p>
+    <svg viewBox=${`0 0 ${W} ${H}`} role="img" aria-label="Calories per day, last 14 days">
+      ${data.map((d, j) => { const h = d.v ? Math.max(3, Y(0) - Y(d.v)) : 0; return html`<g class="hit" onClick=${() => setSel(sel === j ? null : j)}>
+        <rect x=${j*bw} y="0" width=${bw} height=${H} fill="transparent"/>
+        <path class=${"kb" + (d.v > S.k ? " over" : "") + (sel === j ? " sel" : "")} d=${barPath(j*bw + 3, Y(0), bw - 6, h)}/></g>`; })}
+      <line x1="0" x2=${W} y1=${Y(S.k)} y2=${Y(S.k)} class="target"/>
+    </svg>
+    <p class="legend"><span><i class="sw cal"></i>Under ${S.k} kcal</span><span><i class="sw acc"></i>Over</span></p></div>`;
+}
+const KEY_LIFTS = [["Conventional Deadlift","Deadlift","Tue"],["Weighted Pull-up (med-wide)","Weighted pull-up","Tue"],["Barbell Flat Bench Press","Bench press","Mon"],["Barbell Back Squat","Squat","Sat"]];
+function Spark({pts}){
+  if (pts.length < 2) return html`<svg viewBox="0 0 100 34"></svg>`;
+  const lo = Math.min(...pts.map((p) => p.y)), hi = Math.max(...pts.map((p) => p.y)) || 1;
+  return html`<svg viewBox="0 0 100 34" aria-hidden="true"><polyline class="spark" points=${pts.map((p, j) => `${(100*j/(pts.length-1)).toFixed(1)},${(30 - 26*(p.y - lo)/((hi - lo) || 1)).toFixed(1)}`).join(" ")}/></svg>`;
+}
+function Progress({nav}){
+  const avg = bwAvg(), tk = today(), mon = mondayOf(new Date());
+  const ms = muscleSets(), ago = key(addDays(new Date(), -28));
+  const lift = (n) => { const h = e1History(n); if (!h.length) return null; const best = Math.max(...h.map((p) => p.y)), before = h.filter((p) => p.x <= ago).map((p) => p.y); return {h, best, d: before.length ? best - Math.max(...before) : null, last: h[h.length-1].x}; };
+  const names = [...new Set(DB.lifts.flatMap((s) => s.exercises.filter((e) => e.sets.some((x) => isDone(x) && num(x.w))).map((e) => e.name)))];
+  const rows = names.map((n) => ({n, ...lift(n)})).sort((a,b) => a.last < b.last ? 1 : -1);
   const start = addDays(mon, -17*7);
   const cells = Array.from({length:18*7}, (_, j) => { const k = key(addDays(start, j)); if (k > tk) return {k, lv:"f"}; const d = dayRec(k); const c = legacy(d) ? Math.round(d.old*1.5) : doneCount(k); return {k, c, lv: c >= 6 ? 4 : c >= MET ? 3 : c >= 2 ? 2 : c >= 1 ? 1 : 0}; });
-  const [cell, setCell] = useState(null);
-  const pd = Array.from({length:14}, (_, j) => { const k = key(addDays(now, j-13)); return {v: totals(k).p, label: longDate(k), tick: parseKey(k).getDate()}; });
-  return html`
-    <h2 class="sh">This week</h2>
-    <section class="card stats3">
-      <div><b class="num">${wd}<small>/${Object.keys(PROGRAM).length}</small></b><span>workouts</span></div>
-      <div><b class="num">${Math.round(avgP)}<small> g</small></b><span>avg protein</span></div>
-      <div><b class="num">${met}<small>/${days7.length}</small></b><span>habit days met</span></div>
-    </section>
-    <h2 class="sh">Habits, last 18 weeks</h2>
-    <section class="card pad">
-      <p class="readout num" aria-live="polite">${cell ? html`<b>${cell.lv === "f" ? "Upcoming" : `${cell.c} of 6 habits`}</b> · ${longDate(cell.k)}` : html`<span class="muted">Tap a day · streak ${streak()} days</span>`}</p>
-      <div class="heat" role="img" aria-label="Habit calendar">${cells.map((c) => html`<button class=${"l"+c.lv + (c.k === tk ? " td" : "")} onClick=${() => setCell(c)} aria-label=${c.k}></button>`)}</div>
-      <p class="legend">0 <span class="hl l0"></span><span class="hl l1"></span><span class="hl l2"></span><span class="hl l3"></span><span class="hl l4"></span> 6 habits</p><p class="hint">Each column is a week, Monday on top.</p>
-    </section>
-    <h2 class="sh">Protein, last 14 days</h2>
-    <section class="card pad"><${BarChart} data=${pd} target=${DB.set.p} unit="g" label="Protein per day for the last 14 days"/></section>`;
-}
-function Strength({nav}){
-  const ms = muscleSets();
-  const names = [...new Set(DB.lifts.flatMap((s) => s.exercises.filter((e) => e.sets.some((x) => isDone(x) && num(x.w))).map((e) => e.name)))];
-  const ago = key(addDays(new Date(), -28));
-  const rows = names.map((n) => { const h = e1History(n), best = Math.max(...h.map((p) => p.y)); const before = h.filter((p) => p.x <= ago).map((p) => p.y); const was = before.length ? Math.max(...before) : null; return {n, best, d: was != null ? best - was : null, last: h[h.length-1].x}; }).sort((a,b) => a.last < b.last ? 1 : -1);
+  const [cell, setCell] = useState(null), [all, setAll] = useState(false);
   const maxSets = Math.max(20, ...Object.values(ms), ...Object.values(PLANNED));
-  return html`
-    <h2 class="sh">Sets per muscle this week</h2>
+  return html`<${Title} title="Progress"/>
+    <${CutHero} avg=${avg}/>
+    <h2 class="gh2">This week<small>Mon–Sun</small></h2>
+    <${WeekGrid}/>
+    <h2 class="gh2">Eating<small>last 14 days</small></h2>
+    <section class="card pad"><${KcalChart}/></section>
+    <h2 class="gh2">Strength<small>est. 1-rep max</small></h2>
+    <div class="lifts">${KEY_LIFTS.map(([n, label, day]) => { const r = lift(n); return html`<button class="liftc" onClick=${() => nav.open({kind:"ex", name:n})}>
+      <span class="n">${label}</span><b class="num">${r ? `${fmt(r.best)} kg` : "–"}</b>
+      <span class=${"d" + (r && r.d > 0 ? " pos" : "")}>${!r ? `log ${day}` : r.d == null ? `since ${short(r.h[0].x)}` : `${r.d >= 0 ? "+" : ""}${fmt(r.d)} in 4 wk`}</span>
+      <${Spark} pts=${r ? r.h : []}/></button>`; })}</div>
+    <p class="foot">Holding strength on a cut means you are keeping muscle.</p>
+    <section class="card list">${(all ? rows : rows.slice(0, 5)).map((r) => html`<button class="cell" onClick=${() => nav.open({kind:"ex", name:r.n})}>
+      <div class="grow"><b>${r.n}</b><span>Last done ${short(r.last)}</span></div>
+      <span class="val num">${fmt(r.best)} kg<small class=${r.d > 0 ? "pos" : ""}>${r.d == null ? "est. 1RM" : `${r.d >= 0 ? "+" : ""}${fmt(r.d)} kg in 4 wk`}</small></span><${Icon} n="chev" s=${16}/></button>`)}
+      ${!all && rows.length > 5 && html`<button class="cell" onClick=${() => setAll(true)}><span class="grow"><span>All ${rows.length} lifts</span></span><${Icon} n="chev" s=${16}/></button>`}
+      ${!rows.length && html`<div class="cell"><div class="grow"><span>Log a workout to see your lifts here.</span></div></div>`}</section>
+    <h2 class="gh2">Sets per muscle<small>this week</small></h2>
     <section class="card pad">
       ${Object.keys(PLANNED).map((m) => html`<div class="mbar"><span class="mname">${m}</span>
         <div class="mtrack"><i style=${`width:${100*ms[m]/maxSets}%`}></i><em style=${`left:${100*PLANNED[m]/maxSets}%`}></em></div>
         <span class="num mval">${ms[m]}<small>/${PLANNED[m]}</small></span></div>`)}
       <p class="legend"><i class="sw met"></i>Done <i class="tickm"></i>Planned</p>
     </section>
-    <h2 class="sh">Lifts</h2>
-    <section class="card list">${rows.length ? rows.map((r) => html`<button class="cell" onClick=${() => nav.open({kind:"ex", name:r.n})}>
-      <div class="grow"><b>${r.n}</b><span>Last done ${short(r.last)}</span></div>
-      <span class="val num">${fmt(r.best)} kg<small class=${r.d > 0 ? "pos" : ""}>${r.d == null ? "est. 1RM" : `${r.d >= 0 ? "+" : ""}${fmt(r.d)} kg in 4 wk`}</small></span><${Icon} n="chev" s=${16}/></button>`)
-      : html`<div class="cell"><div class="grow"><span>Log a workout to see your lifts here.</span></div></div>`}</section>`;
-}
-function Body(){
-  const [bw, setBw] = useState("");
-  const pts = DB.bw.slice(-90).map((b) => ({x:b.date, y:b.kg}));
-  // Trailing 7-day average smooths out day-to-day water weight.
-  const avg = pts.map((p) => { const t = parseKey(p.x).getTime(); const w = pts.filter((q) => { const d = (t - parseKey(q.x).getTime())/864e5; return d >= 0 && d < 7; }); return {x:p.x, y:w.reduce((a,q) => a+q.y, 0)/w.length}; });
-  const last = pts[pts.length-1], ago = pts.filter((p) => p.x <= key(addDays(new Date(), -28))).pop();
-  return html`
-    <h2 class="sh">Bodyweight</h2>
-    <form class="card list" onSubmit=${(e) => { e.preventDefault(); if (!num(bw)) return toast("Enter your weight in kg"); addBw(DB, today(), bw); setBw(""); toast("Saved"); commit(); }}>
-      <div class="cell"><div class="grow"><b>Log today</b><span>Weigh in at the same time each morning.</span></div>
-        <input class="inp num" type="number" inputmode="decimal" step="0.1" placeholder="kg" value=${bw} onInput=${(e) => setBw(e.target.value)} aria-label="Bodyweight in kg"/><button class="btn">Save</button></div></form>
-    ${last && html`<section class="card stats3">
-      <div><b class="num">${fmt(last.y)}<small> kg</small></b><span>latest</span></div>
-      <div><b class="num">${ago ? `${last.y - ago.y >= 0 ? "+" : ""}${fmt(last.y - ago.y)}` : "–"}<small> kg</small></b><span>vs 4 weeks ago</span></div>
-      <div><b class="num">${fmt(avg[avg.length-1].y)}<small> kg</small></b><span>7-day average</span></div></section>`}
-    <section class="card pad"><${LineChart} pts=${pts} avg=${avg} unit="kg" label="Bodyweight, last 90 entries"/></section>`;
+    <h2 class="gh2">Habits<small>18 weeks · streak ${streak()}</small></h2>
+    <section class="card pad">
+      <p class="readout num" aria-live="polite">${cell ? html`<b>${cell.lv === "f" ? "Upcoming" : `${cell.c} of ${HABITS.length} habits`}</b> · ${longDate(cell.k)}` : html`<span class="muted">Tap a day</span>`}</p>
+      <div class="heat" role="img" aria-label="Habit calendar">${cells.map((c) => html`<button class=${"l"+c.lv + (c.k === tk ? " td" : "")} onClick=${() => setCell(c)} aria-label=${c.k}></button>`)}</div>
+      <p class="legend">0 <span class="hl l0"></span><span class="hl l1"></span><span class="hl l2"></span><span class="hl l3"></span><span class="hl l4"></span> ${HABITS.length} habits</p><p class="hint">Each column is a week, Monday on top.</p>
+    </section>`;
 }
 
 /* ================= Settings ================= */
@@ -752,6 +786,13 @@ function Settings({nav}){
     <section class="card list">
       ${[["p","Protein","g"],["k","Calories","kcal"],["w","Water","glasses"]].map(([f,l,u]) => html`<label class="cell"><div class="grow"><b>${l}</b></div>
         <input class="inp num" type="number" inputmode="numeric" value=${S[f]} onChange=${(e) => setT(f, e.target.value)}/><span class="unit">${u}</span></label>`)}
+    </section>
+    <h2 class="sh">Body</h2>
+    <section class="card list">
+      <label class="cell"><div class="grow"><b>Body fat now</b><span>${S.lean ? `Lean mass ${fmt(S.lean)} kg, from your 7-day average weight` : "Sets your lean mass for the goal weight"}</span></div>
+        <input class="inp num" type="number" inputmode="decimal" placeholder="%" onChange=${(e) => { const bf = num(e.target.value), a = bwAvg().pop(); if (!a) return toast("Log your weight first"); if (bf > 3 && bf < 60) { S.lean = r1(a.y * (1 - bf/100)); save(); toast(`Lean mass ${fmt(S.lean)} kg`); rerender(); } }}/><span class="unit">%</span></label>
+      <label class="cell"><div class="grow"><b>Goal body fat</b></div>
+        <input class="inp num" type="number" inputmode="numeric" value=${S.goalBf || 15} onChange=${(e) => setT("goalBf", e.target.value)}/><span class="unit">%</span></label>
     </section>
     <h2 class="sh">Training</h2>
     <section class="card list"><label class="cell"><div class="grow"><b>Deload every 5th week</b><span>Half the sets at 90% weight</span></div>
