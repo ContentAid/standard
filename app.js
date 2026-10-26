@@ -104,42 +104,23 @@ function load(){
 }
 let DB = load();
 let saveOk = true;
-function save(){ try { localStorage.setItem(LS, JSON.stringify(DB)); saveOk = true; } catch(e){ saveOk = false; } syncSoon(); }
+function save(){ try { localStorage.setItem(LS, JSON.stringify(DB)); saveOk = true; } catch(e){ saveOk = false; } }
 
-/* ================= sync ================= */
-// Offline first: every save also goes to data.json in a private GitHub repo once online.
-// The token lives in its own key, never inside DB, so exports never carry it.
-// ponytail: last write wins, fine for one phone; merge if a second device ever logs too.
-// ponytail: the contents API returns inline content up to 1 MB (about a year of logs); switch pullSync to the raw media type past that.
-const SYNC_REPO = "ContentAid/standard-data", SK = "standard-sync";
-let sync = {}; try { sync = JSON.parse(localStorage.getItem(SK)) || {}; } catch(e){}
-const saveSync = () => { try { localStorage.setItem(SK, JSON.stringify(sync)); } catch(e){} };
-let syncT = 0, syncing = false, dirty = false;
-function syncSoon(){ if (!sync.token) return; clearTimeout(syncT); syncT = setTimeout(pushSync, 4000); }
-const gh = (method, body) => fetch(`https://api.github.com/repos/${SYNC_REPO}/contents/data.json`, {method, cache:"no-store",
-  headers:{Authorization:"Bearer "+sync.token, Accept:"application/vnd.github+json"}, body: body && JSON.stringify(body)});
-const b64 = (str) => { const b = new TextEncoder().encode(str); let o = ""; for (let i = 0; i < b.length; i += 8192) o += String.fromCharCode(...b.subarray(i, i+8192)); return btoa(o); };
-const unb64 = (x) => new TextDecoder().decode(Uint8Array.from(atob(x.replace(/\n/g,"")), (c) => c.charCodeAt(0)));
-async function pushSync(retry){
-  if (!sync.token || !navigator.onLine) return;
-  if (syncing) { dirty = true; return; } // a save during a push goes out right after it
-  syncing = true;
+/* ================= daily backup file ================= */
+// No tokens anywhere: on the first tap of each day the app saves standard-DATE.json to Downloads, and Syncthing on the phone carries it to the laptop.
+const BK = LS + "-backup";
+function dailyBackup(){
   try {
-    if (!sync.sha) { const r = await gh("GET"); if (r.ok) sync.sha = (await r.json()).sha; else if (r.status !== 404) throw r.status; }
-    const r = await gh("PUT", {message:"sync "+new Date().toISOString(), content:b64(JSON.stringify(DB, null, 1)), sha:sync.sha});
-    if ((r.status === 409 || r.status === 422) && !retry) { sync.sha = null; syncing = false; return pushSync(true); }
-    if (!r.ok) throw r.status;
-    sync.sha = (await r.json()).content.sha; sync.at = Date.now(); sync.err = "";
-  } catch(e){ sync.err = e === 401 ? "Token rejected" : "Not synced yet (" + (typeof e === "number" ? e : "offline") + ")"; }
-  syncing = false; saveSync(); rerender();
-  if (dirty) { dirty = false; syncSoon(); }
+    const day = today();
+    if (localStorage.getItem(BK) === day || (!DB.lifts.length && !Object.keys(DB.food).length && !DB.bw.length)) return;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(DB, null, 1)], {type:"application/json"}));
+    a.download = "standard-"+day+".json"; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    localStorage.setItem(BK, day); DB.lastExport = Date.now(); save();
+  } catch(e){}
 }
-async function pullSync(){
-  const r = await gh("GET"); if (!r.ok) throw r.status;
-  const j = await r.json(); sync.sha = j.sha; saveSync();
-  return JSON.parse(unb64(j.content));
-}
-addEventListener("online", () => syncSoon());
+addEventListener("pointerdown", dailyBackup);
 save();
 try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch(e){}
 
@@ -238,6 +219,15 @@ const setsTotal = (rec) => rec.exercises.reduce((a,e) => a + e.sets.length, 0);
 // Rough session length: sets x (40 s work + rest).
 const minutes = (day) => Math.round(PROGRAM[day].ex.reduce((a,e) => a + e[1]*(40 + restSec(e[3])), 0) / 60 / 5) * 5;
 
+/* ================= theme ================= */
+// Dark by default. index.html applies the saved choice before first paint; "auto" follows the phone.
+const theme = () => { try { return localStorage.getItem("standard-theme") || "dark"; } catch(e){ return "dark"; } };
+function setTheme(t){
+  try { localStorage.setItem("standard-theme", t); } catch(e){}
+  if (t === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = t;
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => { if (t === "auto") return; m.removeAttribute("media"); m.content = t === "dark" ? "#15130f" : "#f6f1e7"; });
+}
+
 /* ================= shell ================= */
 let rerender = () => {};
 const commit = () => { save(); rerender(); };
@@ -280,7 +270,6 @@ function Today({nav}){
   const other = t.k - MEAL.reduce((a, x) => a + mealVal(x[0]).k, 0), otherP = t.p - MEAL.reduce((a, x) => a + mealVal(x[0]).p, 0);
   const rec = P && DB.lifts.find((s) => s.date === k && s.day === day), n = rec ? setsDone(rec) : 0;
   const lp = S.p - t.p, lk = kt.t - t.k;
-  const nudge = !sync.token && DB.lifts.length > 0 && (!DB.lastExport || Date.now() - DB.lastExport > 7*864e5);
   return html`
     <div class="head"><div><div class="sub">${new Date().toLocaleDateString(undefined,{weekday:"long", day:"numeric", month:"long"})}</div><h1>Today</h1></div>
       <button class="gear" onClick=${nav.settings} aria-label="Settings"><${Ic} n="gear"/></button></div>
@@ -313,8 +302,7 @@ function Today({nav}){
     <h2>Gym<small>${P ? `${day} · ${P.title}` : "Rest day"}</small></h2>
     ${P ? html`<div class="start"><div><b>${P.title}</b><span class="sub">${n ? `${n} of ${setsTotal(rec)} sets done` : `${P.ex.length} exercises · about ${minutes(day)} min`}</span></div>
       <button class="btn ic-l" onClick=${() => nav.go("gym")}><${Ic} n="gym"/>${n ? "Continue" : "Start"}</button></div>`
-      : html`<div class="start"><div><b>Rest day</b><span class="sub">Eat, sleep, back on Monday.</span></div></div>`}
-    ${nudge && html`<div class="nudge"><span>${DB.lastExport ? "No backup for over a week." : "No backup yet."}</span><button class="btn" style="padding:8px 14px" onClick=${exportData}>Back up</button></div>`}`;
+      : html`<div class="start"><div><b>Rest day</b><span class="sub">Eat, sleep, back on Monday.</span></div></div>`}`;
 }
 
 /* ================= Gym ================= */
@@ -428,14 +416,7 @@ const KEY_LIFTS = [["Conventional Deadlift","Deadlift"],["Weighted Pull-up (med-
 /* ================= Settings ================= */
 function Settings({nav}){
   const S = DB.set, fileRef = useRef(), [armed, setArmed] = useState(false), [armed2, setArmed2] = useState(false);
-  const [tok, setTok] = useState(""), [armed3, setArmed3] = useState(false), goal = goalOf();
-  const connect = async () => {
-    sync = {token: tok.trim()}; saveSync(); setTok("");
-    try { const o = await pullSync(); const empty = ["days","food","water","lifts","bw","custom"].every((k) => !Object.keys(DB[k]).length);
-      if (empty) { DB = norm(o); save(); toast("Restored from sync"); } else { toast("Connected"); pushSync(); } }
-    catch(e){ if (e === 404) { toast("Connected"); pushSync(); } else { sync = {}; saveSync(); toast(e === 401 ? "Token rejected" : "Couldn't reach GitHub"); } }
-    rerender();
-  };
+  const goal = goalOf();
   const setT = (f, v) => { if (num(v) > 0) { S[f] = num(v); save(); toast("Saved"); rerender(); } };
   return html`
     <button class="backbtn" onClick=${nav.back}><${Ic} n="back"/>Back</button>
@@ -450,15 +431,9 @@ function Settings({nav}){
       <label class="cell"><div class="grow"><b>Goal weight</b></div><input class="inp" type="number" inputmode="decimal" step="0.5" value=${goal.kg || ""} placeholder="kg" onChange=${(e) => setT("goalKg", e.target.value)}/><span class="unit">kg</span></label>
       <label class="cell"><div class="grow"><b>Goal date</b></div><input class="inp date" type="date" value=${goal.date} onChange=${(e) => { if (e.target.value) { S.goalDate = e.target.value; save(); toast("Saved"); rerender(); } }}/></label>
     </section>
-    <h2>Sync</h2>
-    ${sync.token ? html`<section class="card list">
-      <div class="cell"><div class="grow"><b>${sync.err || (sync.at ? `Synced ${new Date(sync.at).toLocaleString(undefined,{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}` : "Connected, syncing…")}</b><span class="d">Every change is saved to the private repo ${SYNC_REPO} when you're online.</span></div></div>
-      <button class="cell" onClick=${() => pushSync()}><div class="grow"><b>Sync now</b></div></button>
-      <button class="cell" onClick=${async () => { if (!armed3) return setArmed3(true); try { DB = norm(await pullSync()); save(); toast("Restored from sync"); } catch(e){ toast("Couldn't restore"); } setArmed3(false); rerender(); }}><div class="grow"><b>${armed3 ? "Tap again: replace this phone's data with the synced copy" : "Restore from sync"}</b><span class="d">For a new phone or after a reset</span></div></button>
-      <button class="cell danger" onClick=${() => { sync = {}; saveSync(); rerender(); }}><div class="grow"><b>Disconnect</b></div></button></section>`
-    : html`<form class="card list" onSubmit=${(e) => { e.preventDefault(); if (tok.trim()) connect(); }}>
-      <div class="cell col"><div><b>Back up automatically</b><span class="d">Make a fine-grained token at github.com/settings/personal-access-tokens/new: only ${SYNC_REPO}, Contents read and write. Paste it here once.</span></div>
-        <div class="row"><input class="inp grow" type="password" autocomplete="off" placeholder="github_pat_…" value=${tok} onInput=${(e) => setTok(e.target.value)} aria-label="GitHub token"/><button class="btn">Connect</button></div></div></form>`}
+    <h2>Look</h2>
+    <section class="card list"><div class="cell"><div class="grow"><b>Theme</b></div>
+      <div class="seg3">${[["dark","Dark"],["light","Light"],["auto","Auto"]].map(([v,l]) => html`<button class=${theme() === v ? "on" : ""} onClick=${() => { setTheme(v); rerender(); }}>${l}</button>`)}</div></div></section>
     <h2>Your data</h2>
     <section class="card list">
       <button class="cell" onClick=${exportData}><div class="grow"><b>Export backup</b><span class="d">Saves a .json file to your phone</span></div></button>
@@ -466,7 +441,7 @@ function Settings({nav}){
       ${hasSnap() && html`<button class="cell" onClick=${() => { if (!armed2) return setArmed2(true); DB = norm(JSON.parse(localStorage.getItem(LS+"-snap"))); save(); setArmed2(false); toast("Restored"); rerender(); }}><div class="grow"><b>${armed2 ? "Tap again to go back to this morning's copy" : "Undo today's changes"}</b><span class="d">Restores the copy saved when you first opened the app today</span></div></button>`}
       <button class="cell danger" onClick=${() => { if (!armed) return setArmed(true); DB = blank(); save(); setArmed(false); toast("All data deleted"); rerender(); }}><div class="grow"><b>${armed ? "Tap again to delete everything (back up first)" : "Delete all data"}</b></div></button>
     </section>
-    <p class="foot">Your data stays on this phone. ${DB.lastExport ? `Last backup ${short(key(new Date(DB.lastExport)))}.` : "No backup yet."}</p>
+    <p class="foot">Your data stays on this phone. Once a day the app saves a backup file to Downloads (standard-DATE.json); Syncthing carries it off the phone. ${DB.lastExport ? `Last backup ${short(key(new Date(DB.lastExport)))}.` : "No backup yet."}</p>
     <input type="file" accept="application/json,.json" hidden ref=${fileRef} onChange=${(e) => importData(e.target)}/>`;
 }
 function hasSnap(){ try { return !!localStorage.getItem(LS+"-snap"); } catch(e){ return false; } }

@@ -14,6 +14,7 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="icon" href="icon-192.png">
 <title>Standard</title>
+<script>try{var t=localStorage.getItem("standard-theme")||"dark";if(t!=="auto"){document.documentElement.dataset.theme=t;document.querySelectorAll('meta[name="theme-color"]').forEach(function(m){m.removeAttribute("media");m.content=t==="dark"?"#15130f":"#f6f1e7"})}}catch(e){}</script>
 <style>
 @font-face{font-family:Inter;font-weight:400;font-display:swap;src:url(vendor/inter-latin-400-normal.woff2) format("woff2")}
 @font-face{font-family:Inter;font-weight:600;font-display:swap;src:url(vendor/inter-latin-600-normal.woff2) format("woff2")}
@@ -111,7 +112,7 @@ input[type=range]::-moz-range-thumb{width:26px;height:26px;border-radius:50%;bac
 .btn{border:0;background:var(--acc);color:var(--acc-ink);font:800 15px Inter,system-ui;padding:12px 20px;border-radius:14px;cursor:pointer;text-align:center;justify-content:center}
 .btn.ghost{background:var(--sunk);color:var(--ink)}
 .step button:active,.tick:active,.chip:active,.btn:active,.wt .sb:active{transform:scale(.94)}
-.nudge{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--acc-soft);color:var(--acc-text);border-radius:18px;padding:12px 14px;margin-top:10px;font-size:13px;font-weight:600}
+.seg3{display:flex;background:var(--sunk);border-radius:12px;padding:3px}.seg3 button{padding:8px 12px;border-radius:10px;font-weight:700;font-size:13px;color:var(--mute)}.seg3 button.on{background:var(--card);color:var(--ink)}
 .prog{position:sticky;top:0;z-index:5;background:var(--bg);padding:6px 0 12px;margin-top:-6px}.prog .sub{display:flex;justify-content:space-between;margin-bottom:6px}
 .prog .bar{height:8px;border-radius:99px;background:var(--sunk);overflow:hidden}.prog .bar i{display:block;height:100%;background:var(--ok);border-radius:99px;transition:width .2s}
 .ex{background:var(--card);border-radius:22px;padding:14px 16px;margin-bottom:8px}
