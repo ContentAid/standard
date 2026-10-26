@@ -115,14 +115,15 @@ function save(){ try { localStorage.setItem(LS, JSON.stringify(DB)); saveOk = tr
 const SYNC_REPO = "ContentAid/standard-data", SK = "standard-sync";
 let sync = {}; try { sync = JSON.parse(localStorage.getItem(SK)) || {}; } catch(e){}
 const saveSync = () => { try { localStorage.setItem(SK, JSON.stringify(sync)); } catch(e){} };
-let syncT = 0, syncing = false;
+let syncT = 0, syncing = false, dirty = false;
 function syncSoon(){ if (!sync.token) return; clearTimeout(syncT); syncT = setTimeout(pushSync, 4000); }
 const gh = (method, body) => fetch(`https://api.github.com/repos/${SYNC_REPO}/contents/data.json`, {method, cache:"no-store",
   headers:{Authorization:"Bearer "+sync.token, Accept:"application/vnd.github+json"}, body: body && JSON.stringify(body)});
 const b64 = (str) => { const b = new TextEncoder().encode(str); let o = ""; for (let i = 0; i < b.length; i += 8192) o += String.fromCharCode(...b.subarray(i, i+8192)); return btoa(o); };
 const unb64 = (x) => new TextDecoder().decode(Uint8Array.from(atob(x.replace(/\n/g,"")), (c) => c.charCodeAt(0)));
 async function pushSync(retry){
-  if (!sync.token || syncing || !navigator.onLine) return;
+  if (!sync.token || !navigator.onLine) return;
+  if (syncing) { dirty = true; return; } // a save during a push goes out right after it
   syncing = true;
   try {
     if (!sync.sha) { const r = await gh("GET"); if (r.ok) sync.sha = (await r.json()).sha; else if (r.status !== 404) throw r.status; }
@@ -132,6 +133,7 @@ async function pushSync(retry){
     sync.sha = (await r.json()).content.sha; sync.at = Date.now(); sync.err = "";
   } catch(e){ sync.err = e === 401 ? "Token rejected" : "Not synced yet (" + (typeof e === "number" ? e : "offline") + ")"; }
   syncing = false; saveSync(); rerender();
+  if (dirty) { dirty = false; syncSoon(); }
 }
 async function pullSync(){
   const r = await gh("GET"); if (!r.ok) throw r.status;
@@ -802,7 +804,7 @@ function Settings({nav}){
   const [tok, setTok] = useState(""), [armed3, setArmed3] = useState(false);
   const connect = async () => {
     sync = {token: tok.trim()}; saveSync(); setTok("");
-    try { const o = await pullSync(); const empty = !DB.lifts.length && !Object.keys(DB.food).length;
+    try { const o = await pullSync(); const empty = ["days","food","water","lifts","bw","custom"].every((k) => !Object.keys(DB[k]).length);
       if (empty) { DB = norm(o); save(); toast("Restored from sync"); } else { toast("Connected"); pushSync(); } }
     catch(e){ if (e === 404) { toast("Connected"); pushSync(); } else { sync = {}; saveSync(); toast(e === 401 ? "Token rejected" : "Couldn't reach GitHub"); } }
     rerender();
