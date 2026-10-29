@@ -109,15 +109,18 @@ function save(){ try { localStorage.setItem(LS, JSON.stringify(DB)); saveOk = tr
 /* ================= daily backup file ================= */
 // No tokens anywhere: on the first tap of each day the app saves standard-DATE.json to Downloads, and Syncthing on the phone carries it to the laptop.
 const BK = LS + "-backup";
+function download(){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(DB, null, 1)], {type:"application/json"}));
+  a.download = "standard-"+today()+".json"; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  DB.lastExport = Date.now(); save();
+}
 function dailyBackup(){
   try {
     const day = today();
     if (localStorage.getItem(BK) === day || (!DB.lifts.length && !Object.keys(DB.food).length && !DB.bw.length)) return;
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([JSON.stringify(DB, null, 1)], {type:"application/json"}));
-    a.download = "standard-"+day+".json"; document.body.appendChild(a); a.click();
-    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-    localStorage.setItem(BK, day); DB.lastExport = Date.now(); save();
+    download(); localStorage.setItem(BK, day);
   } catch(e){}
 }
 addEventListener("pointerdown", dailyBackup);
@@ -355,17 +358,17 @@ function weightSvg(avg, goal, wk){
   const t0 = parseKey(avg[0].x).getTime(), tn = parseKey(now.x).getTime(), t1 = Math.max(parseKey(goal.date).getTime(), tn + 7*864e5);
   const projEnd = wk != null ? now.y + wk * (t1 - tn) / (7*864e5) : null;
   const lo = Math.floor(Math.min(goal.kg - 1.2, ...avg.map((p) => p.y), projEnd == null ? Infinity : projEnd)), hi = Math.ceil(Math.max(goal.kg + .3, ...avg.map((p) => p.y)) + .3);
-  const X = (t) => px + (W-px-pr) * (t - t0) / (t1 - t0), Y = (v) => pt + (H-pt-pb) * (hi - v) / (hi - lo), sd = (k) => short(k);
+  const X = (t) => px + (W-px-pr) * (t - t0) / (t1 - t0), Y = (v) => pt + (H-pt-pb) * (hi - v) / (hi - lo);
   let s = "";
   for (let v = lo + (hi-lo > 6 ? 2 : 1); v < hi; v += hi-lo > 6 ? 2 : 1) s += `<line x1="${px}" x2="${W-pr}" y1="${Y(v)}" y2="${Y(v)}" stroke="#000" stroke-opacity=".12"/><text class="ax" x="${px-6}" y="${Y(v)+3}" text-anchor="end" ${ink(.55)}>${v}</text>`;
-  s += `<line x1="${px}" x2="${W-pr}" y1="${Y(goal.kg)}" y2="${Y(goal.kg)}" stroke="#2f7d4f" stroke-width="1.5"/><text x="${px+4}" y="${Y(goal.kg)-5}" font-size="10" font-weight="700" fill="#2f7d4f">goal ${fmt(goal.kg)} · ${sd(goal.date)}</text>`;
+  s += `<line x1="${px}" x2="${W-pr}" y1="${Y(goal.kg)}" y2="${Y(goal.kg)}" stroke="#2f7d4f" stroke-width="1.5"/><text x="${px+4}" y="${Y(goal.kg)-5}" font-size="10" font-weight="700" fill="#2f7d4f">goal ${fmt(goal.kg)} · ${short(goal.date)}</text>`;
   s += `<line x1="${px}" x2="${W-pr}" y1="${Y(goal.kg-1)}" y2="${Y(goal.kg-1)}" stroke="#2f7d4f" stroke-opacity=".45" stroke-dasharray="3 4"/><text x="${px+4}" y="${Y(goal.kg-1)+12}" font-size="10" fill="#2f7d4f" fill-opacity=".85">stretch ${fmt(goal.kg-1)}</text>`;
   const raw = DB.bw.slice(-120);
   s += `<polyline points="${raw.map((b) => X(parseKey(b.date).getTime()) + "," + Y(b.kg)).join(" ")}" fill="none" stroke="#1d1a16" stroke-opacity=".3" stroke-width="1.5"/>`;
   s += `<polyline points="${avg.map((p) => X(parseKey(p.x).getTime()) + "," + Y(p.y)).join(" ")}" fill="none" stroke="#e2531f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
   if (projEnd != null) s += `<line x1="${X(tn)}" y1="${Y(now.y)}" x2="${X(t1)}" y2="${Y(projEnd)}" stroke="#e2531f" stroke-width="2" stroke-dasharray="5 6" stroke-opacity=".75"/>`;
   s += `<circle cx="${X(tn)}" cy="${Y(now.y)}" r="5" fill="#e2531f" stroke="#f5efe4" stroke-width="2"/>`;
-  s += `<text class="ax" x="${px}" y="${H-6}" text-anchor="start" ${ink(.55)}>${sd(avg[0].x)}</text><text class="ax" x="${W-pr}" y="${H-6}" text-anchor="end" ${ink(.55)}>${sd(goal.date)}</text>`;
+  s += `<text class="ax" x="${px}" y="${H-6}" text-anchor="start" ${ink(.55)}>${short(avg[0].x)}</text><text class="ax" x="${W-pr}" y="${H-6}" text-anchor="end" ${ink(.55)}>${short(goal.date)}</text>`;
   return s;
 }
 const WEEKDAYS = ["M","T","W","T","F","S"];
@@ -376,13 +379,13 @@ function Progress(){
   const pLvl = (k) => { const p = totals(k).p; return p >= S.p ? 2 : p >= S.p*.8 ? 1 : 0; };
   const kLvl = (k) => { const c = totals(k).k; return !c ? 0 : c <= S.k ? 2 : c <= S.k*1.1 ? 1 : 0; };
   const past = weekKeys.filter((k) => k <= tk);
-  const n = (f) => past.filter((k) => f(k) === 2 || f(k) === true).length;
+  const n = (f) => past.filter(f).length;
   // A lift went up when this week's best estimated max beats everything before Monday.
   const mk = key(mon), trained = [...new Set(DB.lifts.filter((s) => s.date >= mk).flatMap((s) => s.exercises.filter((e) => e.sets.some(isDone) && sessionBest(e)).map((e) => e.name)))];
   const up = trained.filter((nm) => { const h = e1History(nm); const before = h.filter((p) => p.x < mk).map((p) => p.y), now = h.filter((p) => p.x >= mk).map((p) => p.y); return before.length && Math.max(...now) > Math.max(...before); }).length;
   const dots = (a, t) => html`<div class="dots">${Array.from({length:t}, (_, i) => html`<i class=${i < a ? "on" : ""}></i>`)}</div>`;
   const win = (ic, a, t, l) => html`<div class="win"><${Ic} n=${ic}/><b>${a}${t ? html`<em> / ${t}</em>` : ""}</b><span>${l}</span>${t ? dots(a, t) : dots(a, Math.max(trained.length, a, 1))}</div>`;
-  const row = (l, f) => html`<span>${l}</span>${weekKeys.map((k) => { const v = k > tk ? 0 : f(k); return html`<i class=${v === 2 || v === true ? "ok" : v === 1 ? "part" : ""}></i>`; })}`;
+  const row = (l, f) => html`<span>${l}</span>${weekKeys.map((k) => { const v = k > tk ? 0 : f(k); return html`<i class=${v === 2 ? "ok" : v === 1 ? "part" : ""}></i>`; })}`;
   // protein bars, last 14 days
   const pv = Array.from({length:14}, (_, j) => { const k = key(addDays(new Date(), j-13)); return {k, v:Math.round(totals(k).p)}; });
   const pmax = Math.max(S.p*1.2, ...pv.map((d) => d.v)), psc = 90/pmax, base = 108, bw = 15, gap = 8.6;
@@ -453,13 +456,7 @@ function Settings({nav}){
 }
 function hasSnap(){ try { return !!localStorage.getItem(LS+"-snap"); } catch(e){ return false; } }
 
-function exportData(){
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(DB, null, 1)], {type:"application/json"}));
-  a.download = "standard-"+today()+".json"; document.body.appendChild(a); a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 300);
-  DB.lastExport = Date.now(); save(); toast("Backup saved to Downloads");
-}
+function exportData(){ download(); toast("Backup saved to Downloads"); }
 function importData(input){
   const f = input.files[0]; if (!f) return;
   f.text().then((txt) => {
