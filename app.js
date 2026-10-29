@@ -89,12 +89,13 @@ function absorb(D, o){
   D.lifts.sort((a,b) => a.date < b.date ? -1 : a.date > b.date ? 1 : (a.ts||0)-(b.ts||0));
   return got.join(", ");
 }
+function snap(raw){ try { const day = today(); if (localStorage.getItem(LS+"-snapdate") !== day) { localStorage.setItem(LS+"-snap", raw); localStorage.setItem(LS+"-snapdate", day); } } catch(e){} }
 function load(){
   let raw = null;
   try { raw = localStorage.getItem(LS); } catch(e){}
   if (raw) {
     // Once a day keep yesterday's copy, so a bad update can be rolled back from Settings.
-    try { const day = today(); if (localStorage.getItem(LS+"-snapdate") !== day) { localStorage.setItem(LS+"-snap", raw); localStorage.setItem(LS+"-snapdate", day); } } catch(e){}
+    snap(raw);
     try { return norm(JSON.parse(raw)); }
     catch(e){ try { localStorage.setItem(LS+"-broken-"+Date.now(), raw); } catch(_){} } // never overwrite data we could not read
   }
@@ -148,7 +149,7 @@ const slotOpts = (slot, opts) => {
 // Usual dishes: the plan's options, the one you ate last time first.
 function usual(id){
   const opts = (i) => MEALS.find((m) => m[0] === i)[3];
-  return (id === "snack" ? [...opts("cardio"), ...opts("bed")] : slotOpts(id, opts(id))).slice(0, 3);
+  return slotOpts(id, id === "snack" ? [...opts("bed"), ...opts("cardio")] : opts(id)).slice(0, 3);
 }
 // Today's calories: the target, less a third of what the last 3 logged days went over it. Never more than 300 less, never under 1500. Protein stays fixed.
 function kcalTarget(){
@@ -169,10 +170,10 @@ function lastPerf(name, exclude){
   return null;
 }
 const sessionBest = (e) => e.sets.reduce((b,x) => isDone(x) && num(x.w) ? Math.max(b, epley(num(x.w), num(x.r))) : b, 0);
-function e1History(name){
-  return DB.lifts.map((s) => { const e = s.exercises.find((x) => x.name === name); const b = e ? sessionBest(e) : 0; return b ? {x:s.date, y:r1(b)} : null; }).filter(Boolean);
+function e1History(name, exclude){
+  return DB.lifts.filter((s) => s !== exclude).map((s) => { const e = s.exercises.find((x) => x.name === name); const b = e ? sessionBest(e) : 0; return b ? {x:s.date, y:r1(b)} : null; }).filter(Boolean);
 }
-function stalled(name){ const h = e1History(name); if (h.length < 4) return false; return Math.max(...h.slice(-3).map((p) => p.y)) <= h[h.length-4].y; }
+function stalled(name, exclude){ const h = e1History(name, exclude); if (h.length < 4) return false; return Math.max(...h.slice(-3).map((p) => p.y)) <= h[h.length-4].y; }
 // Heavy compounds start with the top set and step down; isolation and bodyweight stay flat.
 const ISO = /curl|extension|pushdown|crunch|raise|fly|face pull|skull|knee raise/i;
 const isHeavy = (e) => !ISO.test(e[0]) && repRange(e[2])[1] <= 10;
@@ -188,16 +189,18 @@ function prescribe(e, rec){
     if (last.deload) { w = round25(top/.9); r = lo; why = "Back from a deload: your last heavy weight."; }
     else if (top && last.sets.length >= e[1] && work.every((x) => num(x.r) >= hi)) { w = top+inc; r = lo; up = true; why = `Last time every top set hit ${hi} reps, so add ${inc} kg.`; }
     else if (top) { w = top; r = Math.min(hi, Math.max(...work.map((x) => num(x.r))) + 1); why = `Same weight as last time. Get ${hi} reps on the top set to earn +${inc} kg.`; }
+    else if (last.sets.length >= e[1] && last.sets.every((x) => num(x.r) >= hi)) { w = 2.5; r = lo; up = true; why = `Every set hit ${hi} reps: add 2.5 kg.`; }
     else { r = Math.min(hi, Math.max(...last.sets.map((x) => num(x.r))) + 1); why = `Bodyweight: aim for ${r} reps.`; }
     if (from) { up = false; why = `First time: started from your ${from} numbers. Adjust after set 1.`; }
-    if (stalled(e[0])) why += " No progress in 3 sessions: slow the lowering to 3 seconds.";
+    if (stalled(e[0], rec)) why += " No progress in 3 sessions: slow the lowering to 3 seconds.";
   }
   return {w, r, lo, hi, sets:e[1], why, up};
 }
 function buildSession(day){
   const rec = {date:today(), day, ts:Date.now(), exercises:[]};
   rec.exercises = PROGRAM[day].ex.map((e) => { const p = prescribe(e, rec), heavy = isHeavy(e) && p.w;
-    return {name:e[0], sets:Array.from({length:p.sets}, (_, k) => ({w: p.w ? (heavy ? round25(p.w*(1-.1*k)) : p.w) : 0, r: p.r + (heavy ? k : 0), done:false}))}; });
+    // A light lift can round back to the top weight; it only gets the extra reps when the weight really dropped.
+    return {name:e[0], sets:Array.from({length:p.sets}, (_, k) => { const w = p.w ? (heavy ? round25(p.w*(1-.1*k)) : p.w) : 0; return {w, r: p.r + (heavy && w < p.w ? k : 0), done:false}; })}; });
   return rec;
 }
 // Today's session lives only in memory until the first edit or tick, so opening the Gym tab never writes a workout.
@@ -212,13 +215,14 @@ const keep = (rec) => { if (!DB.lifts.includes(rec)) DB.lifts.push(rec); };
 // Import, restore and delete swap the whole store; the unsaved draft goes too, or its old ticks would be written into the new data.
 function replaceDB(d){ DB = d; draft = null; save(); }
 // Changing a set's weight moves the later sets you have not ticked by the same amount, so the step-down shape survives.
-function bump(day, i, k, f, d){
-  const rec = session(day), S = rec.exercises[i].sets; keep(rec);
+// Both take the record on screen, so a tick after midnight still lands in the session it belongs to.
+function bump(rec, i, k, f, d){
+  const S = rec.exercises[i].sets; keep(rec);
   const cur = num(S[k][f]), v = Math.max(0, r1(cur + d)), step = v - cur; S[k][f] = v;
   if (f === "w") for (let m = k+1; m < S.length; m++) if (!S[m].done) S[m].w = Math.max(0, r1(num(S[m].w) + step));
   commit();
 }
-function tick(day, i, k){ const rec = session(day); keep(rec); const x = rec.exercises[i].sets[k]; x.done = !x.done; buzz(12); commit(); }
+function tick(rec, i, k){ keep(rec); const x = rec.exercises[i].sets[k]; x.done = !x.done; buzz(12); commit(); }
 const setsDone = (rec) => rec.exercises.reduce((a,e) => a + e.sets.filter(isDone).length, 0);
 const setsTotal = (rec) => rec.exercises.reduce((a,e) => a + e.sets.length, 0);
 // Rough session length: sets x (40 s work + rest).
@@ -253,7 +257,7 @@ function App(){
   const [tab, setTab] = useState("today");
   const [page, setPage] = useState(null);
   useEffect(() => {
-    const vis = () => { if (!document.hidden) force(); };
+    const vis = () => { if (!document.hidden) { snap(JSON.stringify(DB)); force(); } };
     document.addEventListener("visibilitychange", vis);
     return () => document.removeEventListener("visibilitychange", vis);
   }, []);
@@ -275,7 +279,7 @@ const lastW = () => DB.bw.length ? DB.bw[DB.bw.length-1] : null;
 function Today({nav}){
   const k = today(), t = totals(k), S = DB.set, kt = kcalTarget(), day = dayName(k), P = PROGRAM[day];
   const lw = lastW(), logged = lw && lw.date === k;
-  const setW = (v) => { v = num(v); if (v > 20 && v < 300) { addBw(DB, k, r1(v)); commit(); } };
+  const setW = (v) => { v = num(v); if (v > 20 && v < 300) { addBw(DB, today(), r1(v)); commit(); } };
   const m = MEAL[mealTab], mv = mealVal(m[0]), pMax = Math.max(100, mv.p), kMax = Math.max(1200, mv.k);
   const other = t.k - MEAL.reduce((a, x) => a + mealVal(x[0]).k, 0), otherP = t.p - MEAL.reduce((a, x) => a + mealVal(x[0]).p, 0);
   const rec = P && DB.lifts.find((s) => s.date === k && s.day === day), n = rec ? setsDone(rec) : 0;
@@ -329,9 +333,9 @@ function Gym({nav}){
         <div class="n">${x.name}${heavy ? html`<span class="pill heavy"><${Ic} n="bolt"/>Heavy</span>` : html`<span class="pill"><${Ic} n="steady"/>Steady</span>`}</div>
         <div class="why">${heavy ? "Top set first, then lighter. " : "Same weight every set. "}${why}</div>
         ${x.sets.map((s, k) => html`<div class=${"set" + (s.done ? " sd" : "")}><span class="sn">${k+1}</span>
-          <div class="step"><button aria-label="Less weight" onClick=${() => bump(day, i, k, "w", -2.5)}>−</button><div>${fmt(num(s.w))}<small>kg</small></div><button aria-label="More weight" onClick=${() => bump(day, i, k, "w", 2.5)}>+</button></div>
-          <div class="step"><button aria-label="Fewer reps" onClick=${() => bump(day, i, k, "r", -1)}>−</button><div>${num(s.r)}<small>reps</small></div><button aria-label="More reps" onClick=${() => bump(day, i, k, "r", 1)}>+</button></div>
-          <button class="tick" aria-label=${`Set ${k+1} done`} aria-pressed=${!!s.done} onClick=${() => tick(day, i, k)}><${Ic} n="check"/></button></div>`)}
+          <div class="step"><button aria-label="Less weight" onClick=${() => bump(rec, i, k, "w", -2.5)}>−</button><div>${fmt(num(s.w))}<small>kg</small></div><button aria-label="More weight" onClick=${() => bump(rec, i, k, "w", 2.5)}>+</button></div>
+          <div class="step"><button aria-label="Fewer reps" onClick=${() => bump(rec, i, k, "r", -1)}>−</button><div>${num(s.r)}<small>reps</small></div><button aria-label="More reps" onClick=${() => bump(rec, i, k, "r", 1)}>+</button></div>
+          <button class="tick" aria-label=${`Set ${k+1} done`} aria-pressed=${!!s.done} onClick=${() => tick(rec, i, k)}><${Ic} n="check"/></button></div>`)}
       </div>`; })}
     <button class="btn ic-l" style="width:100%;margin-top:8px;padding:16px;display:flex" disabled=${!n} onClick=${() => { toast(`Saved ${n} sets. Next time the weights come up by themselves.`); nav.go("today"); }}><${Ic} n="check"/>${n === tot ? "Finish workout" : "Finish early"}</button>`;
 }
@@ -357,7 +361,7 @@ function weightSvg(avg, goal, wk){
   const W = 340, H = 150, px = 34, pr = 8, pt = 10, pb = 22, now = avg[avg.length-1];
   const t0 = parseKey(avg[0].x).getTime(), tn = parseKey(now.x).getTime(), t1 = Math.max(parseKey(goal.date).getTime(), tn + 7*864e5);
   const projEnd = wk != null ? now.y + wk * (t1 - tn) / (7*864e5) : null;
-  const lo = Math.floor(Math.min(goal.kg - 1.2, ...avg.map((p) => p.y), projEnd == null ? Infinity : projEnd)), hi = Math.ceil(Math.max(goal.kg + .3, ...avg.map((p) => p.y)) + .3);
+  const lo = Math.floor(Math.min(goal.kg - 1.2, ...avg.map((p) => p.y), projEnd == null ? Infinity : projEnd)), hi = Math.ceil(Math.max(goal.kg + .3, ...avg.map((p) => p.y), projEnd == null ? -Infinity : projEnd) + .3);
   const X = (t) => px + (W-px-pr) * (t - t0) / (t1 - t0), Y = (v) => pt + (H-pt-pb) * (hi - v) / (hi - lo);
   let s = "";
   for (let v = lo + (hi-lo > 6 ? 2 : 1); v < hi; v += hi-lo > 6 ? 2 : 1) s += `<line x1="${px}" x2="${W-pr}" y1="${Y(v)}" y2="${Y(v)}" stroke="#000" stroke-opacity=".12"/><text class="ax" x="${px-6}" y="${Y(v)+3}" text-anchor="end" ${ink(.55)}>${v}</text>`;
@@ -398,7 +402,7 @@ function Progress(){
   const vol = Array.from({length:6}, (_, i) => { const a = key(addDays(mon, (i-5)*7)), b = key(addDays(mon, (i-4)*7)); return r1(DB.lifts.filter((s) => s.date >= a && s.date < b).reduce((t, s) => t + s.exercises.reduce((u, e) => u + e.sets.filter(isDone).reduce((v, x) => v + num(x.w)*num(x.r), 0), 0), 0) / 1000); });
   const vmax = Math.max(...vol, 1); let v = "";
   vol.forEach((t, i) => { const h = Math.max(t/vmax*70, t ? 4 : 0), bx = 14+i*54, last = i === 5; if (h) v += `<path d="M${bx},90 v${-(h-4)} a4,4 0 0 1 4,-4 h32 a4,4 0 0 1 4,4 v${h-4} z" fill="${last ? "var(--acc)" : "var(--bar)"}"/><text class="ax" x="${bx+20}" y="${90-h-5}" text-anchor="middle" style="fill:var(--ink2);font-size:11px;font-weight:700">${t.toFixed(1)}</text>`; v += `<text class="ax" x="${bx+20}" y="104" text-anchor="middle">${last ? "this wk" : "wk " + (i+1)}</text>`; });
-  const need = now && hasGoal ? (now.y - goal.kg) / Math.max(1/7, (parseKey(goal.date) - parseKey(tk)) / (7*864e5)) : null, togo = now && hasGoal ? now.y - goal.kg : null;
+  const need = now && hasGoal && goal.date > tk ? (now.y - goal.kg) / Math.max(1/7, (parseKey(goal.date) - parseKey(tk)) / (7*864e5)) : null, togo = now && hasGoal ? now.y - goal.kg : null;
   return html`<h1>Progress</h1>
     <div class="hero">
       <span class="l">${hasGoal ? `Cut · goal ${fmt(goal.kg)} kg by ${short(goal.date)}` : "Cut · set a goal weight and date in Settings"}</span>
