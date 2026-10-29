@@ -225,7 +225,12 @@ const theme = () => { try { return localStorage.getItem("standard-theme") || "da
 function setTheme(t){
   try { localStorage.setItem("standard-theme", t); } catch(e){}
   if (t === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = t;
-  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => { if (t === "auto") return; m.removeAttribute("media"); m.content = t === "dark" ? "#15130f" : "#f6f1e7"; });
+  // Auto puts back the two media-matched colors from index.html (light first, dark second).
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m, i) => {
+    const s = t === "auto" ? ["light","dark"][i] : t;
+    m.content = s === "dark" ? "#15130f" : "#f6f1e7";
+    if (t === "auto") m.media = `(prefers-color-scheme: ${s})`; else m.removeAttribute("media");
+  });
 }
 
 /* ================= shell ================= */
