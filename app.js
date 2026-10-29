@@ -89,7 +89,8 @@ function absorb(D, o){
   D.lifts.sort((a,b) => a.date < b.date ? -1 : a.date > b.date ? 1 : (a.ts||0)-(b.ts||0));
   return got.join(", ");
 }
-function snap(raw){ try { const day = today(); if (localStorage.getItem(LS+"-snapdate") !== day) { localStorage.setItem(LS+"-snap", raw); localStorage.setItem(LS+"-snapdate", day); } } catch(e){} }
+let broken = false;
+function snap(raw){ if (broken) return; try { const day = today(); if (localStorage.getItem(LS+"-snapdate") !== day) { localStorage.setItem(LS+"-snap", raw); localStorage.setItem(LS+"-snapdate", day); } } catch(e){} }
 function load(){
   let raw = null;
   try { raw = localStorage.getItem(LS); } catch(e){}
@@ -97,7 +98,8 @@ function load(){
     // Once a day keep yesterday's copy, so a bad update can be rolled back from Settings.
     snap(raw);
     try { return norm(JSON.parse(raw)); }
-    catch(e){ try { localStorage.setItem(LS+"-broken-"+Date.now(), raw); } catch(_){} } // never overwrite data we could not read
+    // Never overwrite data we could not read: keep a copy and stop saving until a backup is imported or the data is deleted.
+    catch(e){ broken = true; try { localStorage.setItem(LS+"-broken-"+Date.now(), raw); } catch(_){} }
   }
   const D = blank();
   ["daily-standard-v1","wtrack_v1","ft-v2"].forEach((k) => { try { absorb(D, JSON.parse(localStorage.getItem(k))); } catch(e){} });
@@ -105,7 +107,7 @@ function load(){
 }
 let DB = load();
 let saveOk = true;
-function save(){ try { localStorage.setItem(LS, JSON.stringify(DB)); saveOk = true; } catch(e){ saveOk = false; } }
+function save(){ if (broken) { saveOk = false; return; } try { localStorage.setItem(LS, JSON.stringify(DB)); saveOk = true; } catch(e){ saveOk = false; } }
 
 /* ================= daily backup file ================= */
 // No tokens anywhere: on the first tap of each day the app saves standard-DATE.json to Downloads, and Syncthing on the phone carries it to the laptop.
@@ -120,11 +122,13 @@ function download(){
 function dailyBackup(){
   try {
     const day = today();
-    if (localStorage.getItem(BK) === day || (!DB.lifts.length && !Object.keys(DB.food).length && !DB.bw.length)) return;
+    if (localStorage.getItem(BK) === day || (!DB.lifts.length && !Object.keys(DB.food).length && !DB.bw.length && !Object.keys(DB.days).length)) return;
     download(); localStorage.setItem(BK, day);
   } catch(e){}
 }
-addEventListener("pointerdown", dailyBackup);
+addEventListener("pointerup", dailyBackup); // pointerup, not pointerdown: only it counts as a tap that may start a download
+// Another open copy (installed app plus a browser tab) saved: take its data, or the next save here would erase it.
+addEventListener("storage", (e) => { if (e.key !== LS || !e.newValue) return; try { DB = norm(JSON.parse(e.newValue)); draft = null; rerender(); } catch(_){} });
 save();
 try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch(e){}
 
@@ -213,7 +217,7 @@ function session(day){
 }
 const keep = (rec) => { if (!DB.lifts.includes(rec)) DB.lifts.push(rec); };
 // Import, restore and delete swap the whole store; the unsaved draft goes too, or its old ticks would be written into the new data.
-function replaceDB(d){ DB = d; draft = null; save(); }
+function replaceDB(d){ DB = d; draft = null; broken = false; save(); }
 // Changing a set's weight moves the later sets you have not ticked by the same amount, so the step-down shape survives.
 // Both take the record on screen, so a tick after midnight still lands in the session it belongs to.
 function bump(rec, i, k, f, d){
@@ -271,7 +275,7 @@ function App(){
         <button class=${tab === t ? "on" : ""} onClick=${() => go(t)} aria-current=${tab === t ? "page" : null}><span class="pi"><${Ic} n=${i}/></span>${l}</button>`)}
     </div></nav>
     <div class=${"toast" + (toastMsg ? " show" : "")} role="status" aria-live="polite">${toastMsg}</div>
-    ${!saveOk && html`<div class="savewarn">This browser is blocking storage. Export your data from Settings.</div>`}`;
+    ${!saveOk && html`<div class="savewarn">${broken ? "Your saved data couldn't be read, so nothing is being saved. Import a backup in Settings." : "This browser is blocking storage. Export your data from Settings."}</div>`}`;
 }
 
 /* ================= Today ================= */
