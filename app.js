@@ -289,7 +289,7 @@ function Today({nav}){
       <button class="gear" onClick=${nav.settings} aria-label="Settings"><${Ic} n="gear"/></button></div>
     <div class="wt"><span class="sub"><${Ic} n="scale"/>Weight</span>
       <span class="wv"><button class="sb" aria-label="0.1 kg less" disabled=${!lw} onClick=${() => lw && setW(lw.kg - .1)}>−</button>
-        <input type="number" inputmode="decimal" step="0.1" value=${lw ? lw.kg.toFixed(1) : ""} placeholder="0.0" onChange=${(e) => setW(e.target.value)} aria-label="Weight in kg"/><span class="u">kg</span>
+        <input type="text" inputmode="decimal" name="weight" value=${lw ? lw.kg.toFixed(1) : ""} placeholder="0.0" onChange=${(e) => { const v = num(e.target.value.replace(",", ".")); if (v > 20 && v < 300) setW(v); else { toast("Weight must be 20–300 kg"); e.target.value = lw ? lw.kg.toFixed(1) : ""; } }} aria-label="Weight in kg"/><span class="u">kg</span>
         <button class="sb" aria-label="0.1 kg more" disabled=${!lw} onClick=${() => lw && setW(lw.kg + .1)}>+</button></span>
       ${logged ? html`<span class="okdot" aria-label="Logged today"><${Ic} n="check"/></span>` : html`<button class="chip ic-l" disabled=${!lw} onClick=${() => lw && setW(lw.kg)}><${Ic} n="plus"/>Log</button>`}</div>
     <div class="two">
@@ -305,9 +305,9 @@ function Today({nav}){
       <div class="seg" role="tablist">${MEAL.map((x, i) => { const v = mealVal(x[0]); return html`<button role="tab" aria-selected=${i === mealTab} class=${i === mealTab ? "on" : ""} onClick=${() => { mealTab = i; rerender(); }}><${Ic} n=${x[2]}/>${x[1]}<small>${v.k ? Math.round(v.k) + " kcal" : "—"}</small></button>`; })}</div>
       <div class="chips">${usual(m[0]).map((o) => html`<button class="chip dish" onClick=${() => { setMeal(m[0], o[1], o[2], o[0]); rerender(); }}><b>${o[0]}</b><small>${o[1]} g · ${o[2]} kcal</small></button>`)}</div>
       <div class="sl"><div class="r"><span>Protein</span><b>${Math.round(mv.p)}<em>g</em></b></div>
-        <input type="range" min="0" max=${pMax} step="5" value=${mv.p} aria-label=${m[1] + " protein"} onInput=${(e) => { setMeal(m[0], +e.target.value, mv.k); rerender(); }}/></div>
+        <input type="range" min="0" max=${pMax} step="5" value=${mv.p} name="mealP" aria-label=${m[1] + " protein"} onInput=${(e) => { setMeal(m[0], +e.target.value, mv.k); rerender(); }}/></div>
       <div class="sl"><div class="r"><span>Calories</span><b>${Math.round(mv.k)}<em>kcal</em></b></div>
-        <input type="range" min="0" max=${kMax} step="50" value=${mv.k} aria-label=${m[1] + " calories"} onInput=${(e) => { setMeal(m[0], mv.p, +e.target.value); rerender(); }}/></div>
+        <input type="range" min="0" max=${kMax} step="50" value=${mv.k} name="mealK" aria-label=${m[1] + " calories"} onInput=${(e) => { setMeal(m[0], mv.p, +e.target.value); rerender(); }}/></div>
     </div>
     <div class="card rows" style="margin-top:10px">
       ${MEAL.map((x) => { const v = mealVal(x[0]); return html`<div class="row"><span>${x[1]}</span><b>${v.p || v.k ? `${Math.round(v.p)} g · ${Math.round(v.k)} kcal` : "not logged"}</b></div>`; })}
@@ -337,7 +337,7 @@ function Gym({nav}){
           <div class="step"><button aria-label="Fewer reps" onClick=${() => bump(rec, i, k, "r", -1)}>−</button><div>${num(s.r)}<small>reps</small></div><button aria-label="More reps" onClick=${() => bump(rec, i, k, "r", 1)}>+</button></div>
           <button class="tick" aria-label=${`Set ${k+1} done`} aria-pressed=${!!s.done} onClick=${() => tick(rec, i, k)}><${Ic} n="check"/></button></div>`)}
       </div>`; })}
-    <button class="btn ic-l" style="width:100%;margin-top:8px;padding:16px;display:flex" disabled=${!n} onClick=${() => { toast(`Saved ${n} sets. Next time the weights come up by themselves.`); nav.go("today"); }}><${Ic} n="check"/>${n === tot ? "Finish workout" : "Finish early"}</button>`;
+    <button class="btn ic-l" style="width:100%;margin-top:8px;padding:16px;display:flex" disabled=${!n} onClick=${() => { toast(`${n} sets logged.`); nav.go("today"); }}><${Ic} n="check"/>${n === tot ? "Finish workout" : "Finish early"}</button>`;
 }
 
 /* ================= Progress ================= */
@@ -438,25 +438,25 @@ function Settings({nav}){
     <h2>Daily targets</h2>
     <section class="card list">
       ${[["p","Protein","g"],["k","Calories","kcal"]].map(([f,l,u]) => html`<label class="cell"><div class="grow"><b>${l}</b></div>
-        <input class="inp" type="number" inputmode="numeric" value=${S[f]} onChange=${(e) => setT(f, e.target.value)}/><span class="unit">${u}</span></label>`)}
+        <input class="inp" type="number" inputmode="numeric" name=${f} value=${S[f]} onChange=${(e) => setT(f, e.target.value)}/><span class="unit">${u}</span></label>`)}
     </section>
     <h2>Goal</h2>
     <section class="card list">
-      <label class="cell"><div class="grow"><b>Goal weight</b></div><input class="inp" type="number" inputmode="decimal" step="0.5" value=${goal.kg || ""} placeholder="kg" onChange=${(e) => setT("goalKg", e.target.value)}/><span class="unit">kg</span></label>
-      <label class="cell"><div class="grow"><b>Goal date</b></div><input class="inp date" type="date" value=${goal.date} onChange=${(e) => { if (e.target.value) { S.goalDate = e.target.value; save(); toast("Saved"); rerender(); } }}/></label>
+      <label class="cell"><div class="grow"><b>Goal weight</b></div><input class="inp" type="number" inputmode="decimal" step="0.5" name="goalKg" value=${goal.kg || ""} placeholder="kg" onChange=${(e) => setT("goalKg", e.target.value)}/><span class="unit">kg</span></label>
+      <label class="cell"><div class="grow"><b>Goal date</b></div><input class="inp date" type="date" name="goalDate" value=${goal.date} onChange=${(e) => { if (e.target.value) { S.goalDate = e.target.value; save(); toast("Saved"); rerender(); } }}/></label>
     </section>
     <h2>Look</h2>
     <section class="card list"><div class="cell"><div class="grow"><b>Theme</b></div>
-      <div class="seg3">${[["dark","Dark"],["light","Light"],["auto","Auto"]].map(([v,l]) => html`<button class=${theme() === v ? "on" : ""} onClick=${() => { setTheme(v); rerender(); }}>${l}</button>`)}</div></div></section>
+      <div class="seg3">${[["dark","Dark"],["light","Light"],["auto","Auto"]].map(([v,l]) => html`<button class=${theme() === v ? "on" : ""} aria-pressed=${theme() === v} onClick=${() => { setTheme(v); rerender(); }}>${l}</button>`)}</div></div></section>
     <h2>Your data</h2>
     <section class="card list">
       <button class="cell" onClick=${exportData}><div class="grow"><b>Export backup</b><span class="d">Saves a .json file to your phone</span></div></button>
       <button class="cell" onClick=${() => fileRef.current.click()}><div class="grow"><b>Import</b><span class="d">A backup from this app, WrkTrack, Fitness Tracker or Daily Standard</span></div></button>
-      ${hasSnap() && html`<button class="cell" onClick=${() => { if (!armed2) return setArmed2(true); setArmed2(false); try { replaceDB(norm(JSON.parse(localStorage.getItem(LS+"-snap")))); toast("Restored"); } catch(e){ toast("This morning's copy can't be read"); } }}><div class="grow"><b>${armed2 ? "Tap again to go back to this morning's copy" : "Undo today's changes"}</b><span class="d">Restores the copy saved when you first opened the app today</span></div></button>`}
-      <button class="cell danger" onClick=${() => { if (!armed) return setArmed(true); replaceDB(blank()); setArmed(false); toast("All data deleted"); rerender(); }}><div class="grow"><b>${armed ? "Tap again to delete everything (back up first)" : "Delete all data"}</b></div></button>
+      ${hasSnap() && html`<button class="cell" onClick=${() => { if (!armed2) { setArmed2(true); return setTimeout(() => setArmed2(false), 4000); } setArmed2(false); try { replaceDB(norm(JSON.parse(localStorage.getItem(LS+"-snap")))); toast("Restored"); } catch(e){ toast("This morning's copy can't be read"); } }}><div class="grow"><b>${armed2 ? "Tap again to go back to this morning's copy" : "Undo today's changes"}</b><span class="d">Restores the copy saved when you first opened the app today</span></div></button>`}
+      <button class="cell danger" onClick=${() => { if (!armed) { setArmed(true); return setTimeout(() => setArmed(false), 4000); } replaceDB(blank()); setArmed(false); toast("All data deleted"); rerender(); }}><div class="grow"><b>${armed ? "Tap again to delete everything (back up first)" : "Delete all data"}</b></div></button>
     </section>
     <p class="foot">Your data stays on this phone. Once a day the app saves a backup file to Downloads (standard-DATE.json); Syncthing carries it off the phone. ${DB.lastExport ? `Last backup ${short(key(new Date(DB.lastExport)))}.` : "No backup yet."}</p>
-    <input type="file" accept="application/json,.json" hidden ref=${fileRef} onChange=${(e) => importData(e.target)}/>`;
+    <input type="file" name="import" accept="application/json,.json" hidden ref=${fileRef} onChange=${(e) => importData(e.target)}/>`;
 }
 function hasSnap(){ try { return !!localStorage.getItem(LS+"-snap"); } catch(e){ return false; } }
 
