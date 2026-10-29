@@ -14,6 +14,7 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="icon" href="icon-192.png">
 <title>Standard</title>
+<script>try{var t=localStorage.getItem("standard-theme")||"dark";if(t!=="auto"){document.documentElement.dataset.theme=t;document.querySelectorAll('meta[name="theme-color"]').forEach(function(m){m.removeAttribute("media");m.content=t==="dark"?"#15130f":"#f6f1e7"})}}catch(e){}</script>
 <style>
 @font-face{font-family:Inter;font-weight:400;font-display:swap;src:url(vendor/inter-latin-400-normal.woff2) format("woff2")}
 @font-face{font-family:Inter;font-weight:600;font-display:swap;src:url(vendor/inter-latin-600-normal.woff2) format("woff2")}
@@ -21,7 +22,7 @@
 /* Warm paper, ink stat cards, orange for "do this", green for "done" (Today mockup v2, rated 8+). */
 :root{
   --bg:#f6f1e7; --card:#fffdf8; --sunk:#efe8db; --line:#ece4d6;
-  --ink:#1d1a16; --ink2:#4d463d; --mute:#857d71; --faint:#b3aa9c;
+  --ink:#1d1a16; --ink2:#4d463d; --mute:#6f675c; --faint:#b3aa9c;
   --acc:#e2531f; --acc-ink:#fff; --acc-soft:#fde3d6; --acc-text:#b8400f;
   --ok:#2f7d4f; --ok-soft:#dcefe2;
   --gold:#a86400; --gold-soft:#fbefd9; --warn:#b3261e; --warn-soft:#fbe9e7;
@@ -111,7 +112,7 @@ input[type=range]::-moz-range-thumb{width:26px;height:26px;border-radius:50%;bac
 .btn{border:0;background:var(--acc);color:var(--acc-ink);font:800 15px Inter,system-ui;padding:12px 20px;border-radius:14px;cursor:pointer;text-align:center;justify-content:center}
 .btn.ghost{background:var(--sunk);color:var(--ink)}
 .step button:active,.tick:active,.chip:active,.btn:active,.wt .sb:active{transform:scale(.94)}
-.nudge{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--acc-soft);color:var(--acc-text);border-radius:18px;padding:12px 14px;margin-top:10px;font-size:13px;font-weight:600}
+.seg3{display:flex;background:var(--sunk);border-radius:12px;padding:3px}.seg3 button{min-height:44px;padding:8px 12px;border-radius:10px;font-weight:700;font-size:13px;color:var(--mute)}.seg3 button.on{background:var(--card);color:var(--ink)}
 .prog{position:sticky;top:0;z-index:5;background:var(--bg);padding:6px 0 12px;margin-top:-6px}.prog .sub{display:flex;justify-content:space-between;margin-bottom:6px}
 .prog .bar{height:8px;border-radius:99px;background:var(--sunk);overflow:hidden}.prog .bar i{display:block;height:100%;background:var(--ok);border-radius:99px;transition:width .2s}
 .ex{background:var(--card);border-radius:22px;padding:14px 16px;margin-bottom:8px}
@@ -178,6 +179,12 @@ nav .pi .ic{width:24px;height:24px}
 .inp.date,.inp.grow{width:auto;text-align:left}
 .unit{color:var(--mute);font-size:13px;font-weight:600;width:36px}
 .foot{font-size:12px;color:var(--mute);margin:12px 4px}
+/* Phone fit: the weight row wraps instead of widening the page; gym rows drop the set number under 375px so the tick stays on screen. Ticks and weight buttons are 44px for a sweaty thumb, with a visible ring. */
+.wt{flex-wrap:wrap;row-gap:8px}
+.wt .sb,.tick{width:44px;height:44px}
+.tick{border-color:var(--mute)}
+input[type=range]{touch-action:pan-y}
+@media (max-width:374px){.set .sn{display:none}.set{gap:4px}.step{gap:2px}.ex{padding:14px 10px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
