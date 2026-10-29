@@ -206,6 +206,8 @@ function session(day){
   return draft;
 }
 const keep = (rec) => { if (!DB.lifts.includes(rec)) DB.lifts.push(rec); };
+// Import, restore and delete swap the whole store; the unsaved draft goes too, or its old ticks would be written into the new data.
+function replaceDB(d){ DB = d; draft = null; save(); }
 // Changing a set's weight moves the later sets you have not ticked by the same amount, so the step-down shape survives.
 function bump(day, i, k, f, d){
   const rec = session(day), S = rec.exercises[i].sets; keep(rec);
@@ -443,8 +445,8 @@ function Settings({nav}){
     <section class="card list">
       <button class="cell" onClick=${exportData}><div class="grow"><b>Export backup</b><span class="d">Saves a .json file to your phone</span></div></button>
       <button class="cell" onClick=${() => fileRef.current.click()}><div class="grow"><b>Import</b><span class="d">A backup from this app, WrkTrack, Fitness Tracker or Daily Standard</span></div></button>
-      ${hasSnap() && html`<button class="cell" onClick=${() => { if (!armed2) return setArmed2(true); DB = norm(JSON.parse(localStorage.getItem(LS+"-snap"))); save(); setArmed2(false); toast("Restored"); rerender(); }}><div class="grow"><b>${armed2 ? "Tap again to go back to this morning's copy" : "Undo today's changes"}</b><span class="d">Restores the copy saved when you first opened the app today</span></div></button>`}
-      <button class="cell danger" onClick=${() => { if (!armed) return setArmed(true); DB = blank(); save(); setArmed(false); toast("All data deleted"); rerender(); }}><div class="grow"><b>${armed ? "Tap again to delete everything (back up first)" : "Delete all data"}</b></div></button>
+      ${hasSnap() && html`<button class="cell" onClick=${() => { if (!armed2) return setArmed2(true); setArmed2(false); try { replaceDB(norm(JSON.parse(localStorage.getItem(LS+"-snap")))); toast("Restored"); } catch(e){ toast("This morning's copy can't be read"); } }}><div class="grow"><b>${armed2 ? "Tap again to go back to this morning's copy" : "Undo today's changes"}</b><span class="d">Restores the copy saved when you first opened the app today</span></div></button>`}
+      <button class="cell danger" onClick=${() => { if (!armed) return setArmed(true); replaceDB(blank()); setArmed(false); toast("All data deleted"); rerender(); }}><div class="grow"><b>${armed ? "Tap again to delete everything (back up first)" : "Delete all data"}</b></div></button>
     </section>
     <p class="foot">Your data stays on this phone. Once a day the app saves a backup file to Downloads (standard-DATE.json); Syncthing carries it off the phone. ${DB.lastExport ? `Last backup ${short(key(new Date(DB.lastExport)))}.` : "No backup yet."}</p>
     <input type="file" accept="application/json,.json" hidden ref=${fileRef} onChange=${(e) => importData(e.target)}/>`;
@@ -462,7 +464,7 @@ function importData(input){
   const f = input.files[0]; if (!f) return;
   f.text().then((txt) => {
     const o = JSON.parse(txt);
-    if (o && o.v >= 1 && Array.isArray(o.lifts)) { DB = norm(o); toast("Backup restored"); }
+    if (o && o.v >= 1 && Array.isArray(o.lifts)) { replaceDB(norm(o)); toast("Backup restored"); }
     else { const got = absorb(DB, o); if (!got) throw 0; toast("Imported " + got); }
     commit();
   }).catch(() => toast("This file isn't a backup the app can read")).finally(() => { input.value = ""; });
