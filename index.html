@@ -179,6 +179,12 @@ nav .pi .ic{width:24px;height:24px}
 .inp.date,.inp.grow{width:auto;text-align:left}
 .unit{color:var(--mute);font-size:13px;font-weight:600;width:36px}
 .foot{font-size:12px;color:var(--mute);margin:12px 4px}
+/* Phone fit: the weight row wraps instead of widening the page; gym rows drop the set number under 375px so the tick stays on screen. Ticks and weight buttons are 44px for a sweaty thumb, with a visible ring. */
+.wt{flex-wrap:wrap;row-gap:8px}
+.wt .sb,.tick{width:44px;height:44px}
+.tick{border-color:var(--mute)}
+input[type=range]{touch-action:pan-y}
+@media (max-width:374px){.set .sn{display:none}.set{gap:4px}.step{gap:2px}.ex{padding:14px 10px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
